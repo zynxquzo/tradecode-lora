@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Model artifacts (용량 큼 - Git LFS or 별도 관리)
+*.gguf
+*.safetensors
+checkpoints/
+outputs/
+
+# Data (raw 데이터는 저작권/용량 이슈로 제외 검토)
+data/raw/*.csv
+data/raw/*.json
+
+# 환경변수
+.env
+
+# OS
+.DS_Store
