@@ -14,6 +14,10 @@ outputs/
 data/raw/*.csv
 data/raw/*.json
 
+# 증강/전처리 산출물 (augment.py, preprocess.py로 재생성 가능 - schema_example.jsonl은 예외)
+data/processed/*.jsonl
+!data/processed/schema_example.jsonl
+
 # 환경변수
 .env
 

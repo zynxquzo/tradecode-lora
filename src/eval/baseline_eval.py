@@ -105,7 +105,7 @@ def evaluate(records: list[dict], model: str) -> dict:
 
     for i, rec in enumerate(records, start=1):
         description = rec["input"]
-        true_code = rec["output"][0]["hs_code"]
+        true_code = rec["output"]["hs_code"]
 
         try:
             preds = predict(model, description)

@@ -1,18 +1,20 @@
 """
-raw 상품설명 데이터(csv/json)를 instruction/input/output 포맷의 jsonl로 변환하고
-6자리 HS코드 기준 stratified split(train/eval, 80/20)을 수행하는 스크립트.
+data/processed/augmented.jsonl(원본+패러프레이징 증강본)을 instruction/input/output
+포맷으로 변환하고, 6자리 HS코드 기준 stratified train/eval(80/20) split을 수행하는 스크립트.
 
-기대하는 raw 데이터 컬럼(csv) 또는 키(json list of dict):
-  - description (str): 상품설명 (영문 또는 국문)
-  - hs_code (str): 6자리 HS코드 (숫자만, 예: "610910")
-  - confidence_basis (str, optional): 분류 근거. 없으면 빈 문자열로 채움.
+augmented.jsonl의 각 라인 형식(augment.py 출력):
+  {"description": str, "hs_code": str(6자리), "confidence_basis": str, "is_augmented": bool}
+
+eval 배정 원칙: 같은 클래스 내에서 원본(is_augmented=false)을 증강본보다 우선 배정한다.
+증강 데이터로 평가하면 모델이 학습에 쓴 문장과 유사한 문장으로 평가받게 되어
+지표가 실제보다 부풀려질 수 있기 때문이다.
 
 사용 예:
-  python src/finetune/preprocess.py --input data/raw/products.csv --output-dir data/processed
+  python src/finetune/preprocess.py --input data/processed/augmented.jsonl \
+      --output-dir data/processed
 """
 
 import argparse
-import csv
 import json
 import logging
 import random
@@ -25,26 +27,18 @@ if hasattr(sys.stdout, "reconfigure"):
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-INSTRUCTION_TEXT = (
-    "다음 상품설명을 보고 가장 적절한 HS코드(6자리)를 Top-3로 추천하고, "
-    "각 코드에 대한 분류 근거를 설명하세요."
-)
+INSTRUCTION_TEXT = "다음 상품설명에 해당하는 HS코드를 6자리까지 추천하고 근거를 설명하세요."
 
 HS_CODE_LEN = 6
 
 
-def load_raw_records(input_path: Path) -> list[dict]:
-    if input_path.suffix.lower() == ".csv":
-        with open(input_path, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            records = list(reader)
-    elif input_path.suffix.lower() == ".json":
-        with open(input_path, encoding="utf-8") as f:
-            records = json.load(f)
-        if not isinstance(records, list):
-            raise ValueError("JSON 입력은 레코드 리스트(list of dict) 형태여야 합니다.")
-    else:
-        raise ValueError(f"지원하지 않는 확장자: {input_path.suffix} (csv 또는 json만 지원)")
+def load_augmented_records(path: Path) -> list[dict]:
+    records = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
     return records
 
 
@@ -62,17 +56,16 @@ def to_schema_record(description: str, hs_code: str, confidence_basis: str) -> d
     return {
         "instruction": INSTRUCTION_TEXT,
         "input": description.strip(),
-        "output": [
-            {
-                "hs_code": hs_code,
-                "confidence_basis": confidence_basis.strip() if confidence_basis else "",
-            }
-        ],
+        "output": {
+            "hs_code": hs_code,
+            "confidence_basis": confidence_basis.strip() if confidence_basis else "",
+        },
     }
 
 
 def convert_records(raw_records: list[dict]) -> tuple[list[dict], int]:
-    """raw 레코드를 스키마 포맷으로 변환. (변환된 레코드, 스킵된 개수) 반환."""
+    """augmented 레코드를 스키마 포맷으로 변환. is_augmented 플래그는 별도로 유지해
+    split 단계에서 eval 우선순위 결정에 사용한다. (변환 결과, 스킵 개수) 반환."""
     converted = []
     skipped = 0
     for rec in raw_records:
@@ -81,14 +74,15 @@ def convert_records(raw_records: list[dict]) -> tuple[list[dict], int]:
         if not description or not hs_code:
             skipped += 1
             continue
-        confidence_basis = rec.get("confidence_basis", "")
-        converted.append(to_schema_record(description, hs_code, confidence_basis))
+        schema_rec = to_schema_record(description, hs_code, rec.get("confidence_basis", ""))
+        schema_rec["_is_augmented"] = bool(rec.get("is_augmented", False))
+        converted.append(schema_rec)
     return converted, skipped
 
 
 def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
     """6자리 HS코드 기준 클래스 분포를 계산하고 쏠림을 로그로 출력."""
-    counts = Counter(rec["output"][0]["hs_code"] for rec in records)
+    counts = Counter(rec["output"]["hs_code"] for rec in records)
     total = sum(counts.values())
     logger.info("클래스(HS코드) 종류 수: %d, 전체 샘플 수: %d", len(counts), total)
 
@@ -101,8 +95,7 @@ def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
         top_share = most_common[0][1] / total
         if top_share > 0.3:
             logger.warning(
-                "클래스 불균형 경고: 최다 HS코드(%s)가 전체의 %.1f%%를 차지합니다. "
-                "샘플링/가중치 보정을 고려하세요.",
+                "클래스 불균형 경고: 최다 HS코드(%s)가 전체의 %.1f%%를 차지합니다.",
                 most_common[0][0],
                 100 * top_share,
             )
@@ -110,8 +103,7 @@ def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
     singleton_classes = [code for code, cnt in counts.items() if cnt == 1]
     if singleton_classes:
         logger.warning(
-            "샘플이 1개뿐인 HS코드가 %d개 있습니다. stratified split 시 해당 클래스는 "
-            "train에만 배정됩니다 (eval 배정 불가).",
+            "샘플이 1개뿐인 HS코드가 %d개 있습니다. 해당 클래스는 train에만 배정됩니다.",
             len(singleton_classes),
         )
     return counts
@@ -119,27 +111,40 @@ def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
 
 def stratified_split(
     records: list[dict], eval_ratio: float = 0.2, seed: int = 42
-) -> tuple[list[dict], list[dict]]:
-    """6자리 HS코드 기준으로 클래스별 80/20 stratified split."""
+) -> tuple[list[dict], list[dict], int]:
+    """6자리 HS코드 기준 stratified split. 같은 클래스 내에서는 원본
+    (_is_augmented=False)을 증강본보다 eval에 우선 배정한다.
+    (train, eval, 스킵된 클래스 수) 반환."""
     rng = random.Random(seed)
     by_class: dict[str, list[dict]] = defaultdict(list)
     for rec in records:
-        by_class[rec["output"][0]["hs_code"]].append(rec)
+        by_class[rec["output"]["hs_code"]].append(rec)
 
     train, eval_ = [], []
+    skipped_classes = 0
     for code, class_records in by_class.items():
-        rng.shuffle(class_records)
         if len(class_records) == 1:
-            # 샘플이 1개뿐이면 eval로 나눌 수 없으므로 train에 배정
             train.extend(class_records)
+            skipped_classes += 1
             continue
+
+        originals = [r for r in class_records if not r["_is_augmented"]]
+        augmented = [r for r in class_records if r["_is_augmented"]]
+        rng.shuffle(originals)
+        rng.shuffle(augmented)
+
         n_eval = max(1, round(len(class_records) * eval_ratio))
-        eval_.extend(class_records[:n_eval])
-        train.extend(class_records[n_eval:])
+        eval_pool = originals + augmented  # 원본 우선 배정
+        eval_.extend(eval_pool[:n_eval])
+        train.extend(eval_pool[n_eval:])
 
     rng.shuffle(train)
     rng.shuffle(eval_)
-    return train, eval_
+    return train, eval_, skipped_classes
+
+
+def strip_internal_fields(records: list[dict]) -> list[dict]:
+    return [{k: v for k, v in rec.items() if k != "_is_augmented"} for rec in records]
 
 
 def write_jsonl(records: list[dict], path: Path) -> None:
@@ -150,30 +155,41 @@ def write_jsonl(records: list[dict], path: Path) -> None:
 
 
 def run(input_path: Path, output_dir: Path, eval_ratio: float = 0.2, seed: int = 42) -> None:
-    logger.info("raw 데이터 로드: %s", input_path)
-    raw_records = load_raw_records(input_path)
-    logger.info("raw 레코드 수: %d", len(raw_records))
+    logger.info("증강 데이터 로드: %s", input_path)
+    raw_records = load_augmented_records(input_path)
+    logger.info("원본 레코드 수: %d", len(raw_records))
 
     converted, skipped = convert_records(raw_records)
     logger.info("변환 완료: %d건 성공, %d건 스킵(description/hs_code 누락)", len(converted), skipped)
 
     if not converted:
-        logger.error("변환된 레코드가 없습니다. raw 데이터 형식을 확인하세요.")
+        logger.error("변환된 레코드가 없습니다. augmented.jsonl 형식을 확인하세요.")
         return
 
     check_class_imbalance(converted)
 
-    train, eval_ = stratified_split(converted, eval_ratio=eval_ratio, seed=seed)
-    logger.info("split 완료: train=%d건, eval=%d건", len(train), len(eval_))
+    train, eval_, skipped_classes = stratified_split(converted, eval_ratio=eval_ratio, seed=seed)
+    logger.info(
+        "split 완료: train=%d건, eval=%d건, 샘플 1개라 split 불가했던 클래스=%d개",
+        len(train),
+        len(eval_),
+        skipped_classes,
+    )
+    eval_original_ratio = (
+        sum(1 for r in eval_ if not r["_is_augmented"]) / len(eval_) if eval_ else 0.0
+    )
+    logger.info("eval셋 중 원본 비율: %.1f%%", 100 * eval_original_ratio)
 
-    write_jsonl(train, output_dir / "train.jsonl")
-    write_jsonl(eval_, output_dir / "eval.jsonl")
+    write_jsonl(strip_internal_fields(train), output_dir / "train.jsonl")
+    write_jsonl(strip_internal_fields(eval_), output_dir / "eval.jsonl")
     logger.info("저장 완료: %s, %s", output_dir / "train.jsonl", output_dir / "eval.jsonl")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True, help="raw 데이터 경로 (csv 또는 json)")
+    parser.add_argument(
+        "--input", type=Path, default=Path("data/processed/augmented.jsonl"), help="augmented jsonl 경로"
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("data/processed"), help="출력 디렉토리"
     )
