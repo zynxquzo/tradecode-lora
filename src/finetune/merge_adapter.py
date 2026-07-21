@@ -30,6 +30,17 @@ def run(args: argparse.Namespace) -> None:
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    if "4bit" in args.base_model.lower() or "bnb" in args.base_model.lower():
+        raise ValueError(
+            f"--base-model={args.base_model}는 4bit 양자화 체크포인트로 보입니다. "
+            "LoRA는 반드시 풀 정밀도 베이스(예: google/gemma-2-2b)에 병합해야 합니다 - "
+            "4bit 베이스에 병합하면 정밀도 손실 경고가 뜨고, save_pretrained 시 "
+            "transformers가 4bit 전용 가중치 레이아웃을 되돌리지 못해 "
+            "NotImplementedError로 실패합니다. train.py는 학습 효율을 위해 4bit "
+            "베이스(unsloth/gemma-2-2b-bnb-4bit)를 썼지만, 병합 단계는 그와 별개로 "
+            "항상 풀 정밀도 베이스를 써야 합니다."
+        )
+
     logger.info("베이스 모델(fp16) 로드: %s", args.base_model)
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
