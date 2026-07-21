@@ -25,13 +25,24 @@ trl API 노트 (0.24.0 기준, 아래 코드가 이미 반영함):
     컬럼을 채워 넘긴다 - trl이 이미 토큰화된 데이터셋으로 인식해 그 map() 경로
     자체를 건너뛴다.
   - trl 0.24.0의 SFTTrainer.compute_loss는 use_liger_kernel이 아니면 무조건
-    entropy_from_logits(outputs.logits)를 호출해 토큰 엔트로피를 로깅한다. 그런데
-    unsloth는 VRAM 절약을 위해 기본적으로 outputs.logits를 실제 텐서가 아니라
-    지연 계산용 콜러블로 반환해서("Unsloth: Will smartly offload gradients to
-    save VRAM!" 로그가 그 신호) entropy_from_logits가 `TypeError: 'function'
-    object is not subscriptable`로 죽는다. UNSLOTH_RETURN_LOGITS=1 환경변수를
-    unsloth를 import하기 전에 설정해 실제 logits 텐서를 돌려주도록 강제한다
-    (아래 모듈 최상단 참고).
+    entropy_from_logits(outputs.logits)와 토큰 정확도 계산으로 outputs.logits를
+    두 번 더 쓴다. unsloth는 VRAM 절약을 위해 outputs.logits를 지연 계산용
+    콜러블로 반환하는데("Unsloth: Will smartly offload gradients to save VRAM!"
+    로그가 그 신호), UNSLOTH_RETURN_LOGITS=1(모듈 최상단)을 걸어도 eval 스텝을
+    한 번 통과하며 torch.compile이 그 분기를 다시 캐싱해버려 재발했다
+    (`TypeError: 'function' object is not subscriptable`). 두 로깅 모두 실제
+    loss 계산과 무관하므로(loss는 hidden_states에서 fused 계산됨),
+    build_trainer_class()의 UnslothCompatSFTTrainer가 compute_loss를 상위
+    transformers.Trainer 버전으로 완전히 우회해 outputs.logits를 아예 안 건드리게
+    한다.
+  - unsloth가 컴파일 캐시를 만들며 trl.trainer.sft_config 모듈을 자체적으로 다시
+    exec하면, sys.modules에 등록된 SFTConfig가 실제로 인스턴스를 만든 클래스와
+    다른 사본이 될 수 있다. 체크포인트 저장 시 pickle이 "Can't pickle <class
+    'trl.trainer.sft_config.SFTConfig'>: it's not the same object as ..."로
+    죽는 원인이 이것 - SFTConfig 생성 직후 sys.modules 등록을 실제 클래스로 맞춰
+    고치고, 혹시 남는 경우를 대비해 UnslothCompatSFTTrainer._save에도 방어적으로
+    PicklingError를 흡수하는 안전장치를 둔다(모델/adapter 저장은 이미 끝난 뒤
+    training_args.bin 저장만 실패하는 것이므로 무시해도 안전함).
 
 학습 데이터 포맷은 baseline_eval.py의 zero-shot 프롬프트와 다르다 — baseline은
 "Top-3 JSON 배열"을 요구하지만, 학습 데이터(data/processed/train.jsonl)에는 레코드당
@@ -168,6 +179,8 @@ def build_trainer_class():
     계산에는 쓰이지 않으므로(unsloth가 hidden_states에서 직접 fused loss를 계산),
     compute_loss를 상위 transformers.Trainer 버전으로 완전히 우회해 outputs.logits
     자체를 건드리지 않게 한다 - unsloth의 지연 logits/재컴파일 문제와 무관해진다."""
+    import pickle
+
     from transformers import Trainer
     from trl import SFTTrainer
 
@@ -176,6 +189,18 @@ def build_trainer_class():
             return Trainer.compute_loss(
                 self, model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch
             )
+
+        def _save(self, output_dir=None, state_dict=None):
+            # 방어적 안전장치: run()에서 sys.modules의 SFTConfig 등록을 맞춰주지만,
+            # unsloth가 재컴파일 시점에 또 다른 사본을 만들면 여기서도 같은
+            # PicklingError가 재발할 수 있다. 이 시점에는 모델/토크나이저 저장은 이미
+            # 끝난 뒤 마지막 줄(torch.save(self.args, ...))만 실패하는 것이므로,
+            # 실제 어댑터 가중치 손실 없이 training_args.bin 저장만 건너뛰고 경고로
+            # 남긴다.
+            try:
+                super()._save(output_dir=output_dir, state_dict=state_dict)
+            except pickle.PicklingError as e:
+                logger.warning("training_args.bin 저장 실패(무시, 가중치는 이미 저장됨): %s", e)
 
     return UnslothCompatSFTTrainer
 
@@ -285,6 +310,16 @@ def run(args: argparse.Namespace) -> None:
         bf16=False,
         report_to="none",
     )
+    # unsloth가 컴파일 캐시를 만들며 trl.trainer.sft_config 모듈을 자체적으로 다시
+    # exec해서, sys.modules에 등록된 SFTConfig가 우리가 실제로 인스턴스를 만든 클래스
+    # 객체와 다른 사본이 되는 경우가 있다. 체크포인트 저장 시 pickle이
+    # "Can't pickle <class 'trl.trainer.sft_config.SFTConfig'>: it's not the same
+    # object as ..."로 죽는 원인이 이것이다 (pickle은 클래스를
+    # sys.modules[모듈].이름으로 다시 찾아 identity를 대조한다). 등록을 우리가 실제로
+    # 쓰는 클래스로 맞춰서 근본 원인을 고친다.
+    sft_config_module = sys.modules.get(type(training_args).__module__)
+    if sft_config_module is not None:
+        setattr(sft_config_module, type(training_args).__qualname__, type(training_args))
 
     trainer = TrainerClass(
         model=model,
