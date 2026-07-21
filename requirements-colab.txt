@@ -1,8 +1,18 @@
 # src/finetune/train.py, merge_adapter.py 전용 — GPU 환경(Colab T4 등)에서만 설치.
 # 로컬 머신은 CUDA GPU가 없어 requirements.txt와 분리했다.
+#
+# trl만 버전을 고정했다: train.py의 SFTConfig/SFTTrainer 호출부가 trl==0.24.0의
+# 실제 파라미터명(max_length, processing_class, bf16 기본 동작)에 맞춰 작성돼 있어서,
+# trl이 더 최신으로 알아서 올라가면 또 API가 바뀌어 깨질 수 있다. transformers/unsloth/
+# peft/accelerate/bitsandbytes는 pip가 trl==0.24.0과 호환되는 조합을 알아서 풀도록
+# 버전을 고정하지 않았다 — unsloth는 설치 시점의 최신 transformers/bitsandbytes에
+# 맞춰 스스로 최적화하는 경우가 많아서, 이 셋을 좁게 고정하면 오히려 pip 의존성 해석이
+# 실패하거나 unsloth 성능 최적화가 깨질 위험이 더 크다고 판단했다.
+# trl 버전을 올려야 하면: 1) 이 핀을 올리고 2) train.py 상단 주석의 API 노트와
+# SFTConfig/SFTTrainer 호출부를 새 버전 시그니처에 맞춰 같이 수정할 것.
 unsloth
 transformers
-trl
+trl==0.24.0
 peft
 accelerate
 bitsandbytes
