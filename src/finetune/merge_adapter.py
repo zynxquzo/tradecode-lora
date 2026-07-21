@@ -1,23 +1,24 @@
 """
-train.py가 저장한 LoRA adapter를 풀 정밀도 베이스 모델과 병합해 하나의 HF 모델
-디렉토리로 저장한다. GGUF 변환(llama.cpp)은 병합된 전체 가중치 형태를 입력으로
-받기 때문에 이 단계가 필요하다.
+train.py가 저장한 LoRA adapter를 Unsloth 공식 병합 API(save_pretrained_merged)로
+16bit 풀 정밀도 모델과 병합해 하나의 HF 모델 디렉토리로 저장한다. GGUF 변환
+(llama.cpp)은 병합된 전체 가중치 형태를 입력으로 받기 때문에 이 단계가 필요하다.
 
-기본 베이스 모델은 unsloth/gemma-2-2b(비양자화 bf16 미러, config.json에
-quantization_config 없음)다. google/gemma-2-2b와 동일 가중치이지만 google 쪽은
-HF에서 라이선스 동의 + 인증이 필요한 게이트 저장소라 Colab에서 바로 받으면
-401 GatedRepoError가 난다. google/gemma-2-2b를 굳이 쓰려면 huggingface_hub.login()
-등으로 먼저 인증하고 https://huggingface.co/google/gemma-2-2b 에서 라이선스에
-동의해야 한다.
+Colab(GPU) 실행 전제 - unsloth가 필요하다 (requirements-colab.txt).
 
-fp16 병합이라 2B 모델 기준 메모리 요구량이 크지 않으므로(~5GB) GPU 없이 Colab
-CPU 런타임이나 로컬에서도 돌릴 수 있다 (단, unsloth 4bit 모델로 학습했다면 병합은
-GPU가 있는 편이 안전 — bnb 4bit -> fp16 dequant 과정이 CPU에서 매우 느릴 수 있음).
+왜 순정 peft.PeftModel.merge_and_unload()를 안 쓰는가:
+  처음엔 순정 transformers.AutoModelForCausalLM + peft.PeftModel.merge_and_unload()로
+  별도의 풀 정밀도 베이스(unsloth/gemma-2-2b)에 병합했는데, GGUF 변환 후(양자화
+  여부와 무관하게 f16 상태에서도) 출력이 완전히 깨진 텍스트만 나오는 문제가 있었다.
+  train.py는 Unsloth가 자체 최적화한 4bit 베이스(unsloth/gemma-2-2b-bnb-4bit)로
+  학습했는데, 그렇게 학습한 adapter를 순정 HF/PEFT로 별도 로드한 (아키텍처가 완전히
+  똑같다고 보장되지 않는) 베이스에 병합하는 조합은 Unsloth가 공식 지원하지 않는다.
+  Unsloth는 이 경우 FastLanguageModel.from_pretrained(model_name=adapter_dir)로
+  adapter까지 포함해 다시 불러온 뒤 model.save_pretrained_merged(...,
+  save_method="merged_16bit")로 병합하는 것을 공식 API로 제공하므로 이걸 쓴다.
 
 사용 예:
   python src/finetune/merge_adapter.py \
       --adapter-dir outputs/adapter \
-      --base-model unsloth/gemma-2-2b \
       --output-dir outputs/merged
 """
 
@@ -33,36 +34,23 @@ logger = logging.getLogger(__name__)
 
 
 def run(args: argparse.Namespace) -> None:
-    import torch
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from unsloth import FastLanguageModel
 
-    if "4bit" in args.base_model.lower() or "bnb" in args.base_model.lower():
-        raise ValueError(
-            f"--base-model={args.base_model}는 4bit 양자화 체크포인트로 보입니다. "
-            "LoRA는 반드시 풀 정밀도 베이스(예: google/gemma-2-2b)에 병합해야 합니다 - "
-            "4bit 베이스에 병합하면 정밀도 손실 경고가 뜨고, save_pretrained 시 "
-            "transformers가 4bit 전용 가중치 레이아웃을 되돌리지 못해 "
-            "NotImplementedError로 실패합니다. train.py는 학습 효율을 위해 4bit "
-            "베이스(unsloth/gemma-2-2b-bnb-4bit)를 썼지만, 병합 단계는 그와 별개로 "
-            "항상 풀 정밀도 베이스를 써야 합니다."
-        )
-
-    logger.info("베이스 모델(fp16) 로드: %s", args.base_model)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.base_model,
-        torch_dtype=torch.float16,
-        device_map="auto" if args.device == "auto" else None,
+    logger.info("adapter + 베이스 모델 로드 (unsloth): %s", args.adapter_dir)
+    # adapter_dir의 adapter_config.json에 base_model_name_or_path가 기록돼 있어서
+    # unsloth가 베이스 모델까지 알아서 찾아 불러온다 (train.py가 학습에 쓴
+    # unsloth/gemma-2-2b-bnb-4bit). load_in_4bit=False로 줘서 병합은 16bit로 한다.
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=str(args.adapter_dir),
+        max_seq_length=args.max_seq_length,
+        dtype=None,
+        load_in_4bit=False,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-
-    logger.info("LoRA adapter 로드 및 병합: %s", args.adapter_dir)
-    merged = PeftModel.from_pretrained(base_model, str(args.adapter_dir))
-    merged = merged.merge_and_unload()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    merged.save_pretrained(str(args.output_dir), safe_serialization=True)
-    tokenizer.save_pretrained(str(args.output_dir))
+    logger.info("16bit 병합 저장 시작: %s", args.output_dir)
+    model.save_pretrained_merged(str(args.output_dir), tokenizer, save_method="merged_16bit")
+
     logger.info("병합 완료, 저장 경로: %s", args.output_dir)
     logger.info(
         "다음 단계: bash src/serving/build_ollama_model.sh %s", args.output_dir
@@ -72,18 +60,8 @@ def run(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapter-dir", type=Path, default=Path("outputs/adapter"))
-    parser.add_argument(
-        "--base-model",
-        type=str,
-        default="unsloth/gemma-2-2b",
-        help="풀 정밀도(비양자화) 베이스 모델. google/gemma-2-2b는 HF 게이트 저장소라 "
-        "인증 없이는 401이 난다 - 기본값(unsloth 미러)은 게이트 없이 동일 가중치를 받는다.",
-    )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/merged"))
-    parser.add_argument(
-        "--device", type=str, default="auto", choices=["auto", "cpu"],
-        help="'cpu'는 GPU 없는 환경에서 안전하게 병합할 때 사용 (느림)",
-    )
+    parser.add_argument("--max-seq-length", type=int, default=1024)
     return parser.parse_args()
 
 

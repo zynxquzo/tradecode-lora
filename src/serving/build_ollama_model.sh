@@ -3,12 +3,23 @@
 #
 # 사전 조건:
 #   - src/finetune/merge_adapter.py 실행 완료 (outputs/merged에 병합 모델 존재)
-#   - llama.cpp 클론 + 빌드 완료 (아래 LLAMA_CPP_DIR 지정)
+#   - llama.cpp 클론 완료 (아래 LLAMA_CPP_DIR 지정) - convert_hf_to_gguf.py는 순수
+#     Python이라 클론만 하면 되고 빌드는 필요 없다
+#   - llama-quantize 실행 파일 - 소스 빌드(cmake) 하거나, Windows에서 cmake/MSVC가
+#     없으면 GitHub Releases의 미리 빌드된 바이너리를 받아 LLAMA_QUANTIZE_BIN
+#     환경변수로 경로를 지정 (아래 안내 참고)
 #   - Ollama 설치 및 `ollama serve` 실행 중
 #
 # 사용법:
 #   bash src/serving/build_ollama_model.sh [merged 모델 디렉토리] [양자화 레벨]
 #   예: bash src/serving/build_ollama_model.sh outputs/merged Q4_K_M
+#
+# Windows에서 cmake/Visual Studio Build Tools 없이 진행하는 방법 (권장):
+#   1. https://github.com/ggml-org/llama.cpp/releases/latest 에서
+#      llama-<build>-bin-win-cpu-x64.zip (CPU-only, CUDA 불필요) 다운로드
+#   2. 압축 풀고 그 안의 llama-quantize.exe 경로를 확인
+#   3. LLAMA_QUANTIZE_BIN="C:/path/to/llama-quantize.exe" bash src/serving/build_ollama_model.sh ...
+#      (git bash라면 경로에 슬래시 사용, 예: /c/Users/.../llama-quantize.exe)
 
 set -euo pipefail
 
@@ -21,9 +32,12 @@ MODEL_NAME="tradecode-gemma2"
 mkdir -p "$OUT_DIR"
 
 if [ ! -d "$LLAMA_CPP_DIR" ]; then
-  echo "llama.cpp가 없습니다. 아래 명령으로 먼저 클론/빌드하세요:"
-  echo "  git clone https://github.com/ggerganov/llama.cpp \"$LLAMA_CPP_DIR\""
+  echo "llama.cpp가 없습니다. 아래 명령으로 먼저 클론하세요 (convert_hf_to_gguf.py는"
+  echo "순수 Python이라 빌드 불필요, pip install만 하면 됨):"
+  echo "  git clone https://github.com/ggml-org/llama.cpp \"$LLAMA_CPP_DIR\""
   echo "  pip install -r \"$LLAMA_CPP_DIR/requirements.txt\""
+  echo "llama-quantize 실행 파일은 위 스크립트 상단 주석의 Windows 미리 빌드 바이너리"
+  echo "안내를 참고하거나, cmake로 직접 빌드하세요:"
   echo "  cmake -B \"$LLAMA_CPP_DIR/build\" -S \"$LLAMA_CPP_DIR\" && cmake --build \"$LLAMA_CPP_DIR/build\" --config Release -j"
   exit 1
 fi
@@ -37,11 +51,28 @@ python "$LLAMA_CPP_DIR/convert_hf_to_gguf.py" "$MERGED_DIR" \
   --outtype f16
 
 echo "[2/3] 양자화 ($QUANT_LEVEL)"
-# llama-quantize 바이너리 경로는 빌드 방식(cmake vs make)에 따라 다를 수 있음.
-# 없으면 "$LLAMA_CPP_DIR/build/bin/llama-quantize" 등 실제 빌드 산출물 경로로 교체.
-QUANTIZE_BIN="$LLAMA_CPP_DIR/build/bin/llama-quantize"
-if [ ! -x "$QUANTIZE_BIN" ]; then
-  QUANTIZE_BIN="$LLAMA_CPP_DIR/llama-quantize"
+# LLAMA_QUANTIZE_BIN 환경변수가 있으면 그걸 최우선 사용 (Windows 미리 빌드 바이너리용).
+# 없으면 소스 빌드 결과물 경로를 순서대로 탐색한다 (빌드 방식/OS에 따라 다름).
+if [ -n "${LLAMA_QUANTIZE_BIN:-}" ]; then
+  QUANTIZE_BIN="$LLAMA_QUANTIZE_BIN"
+else
+  QUANTIZE_BIN=""
+  for candidate in \
+    "$LLAMA_CPP_DIR/build/bin/llama-quantize" \
+    "$LLAMA_CPP_DIR/build/bin/Release/llama-quantize.exe" \
+    "$LLAMA_CPP_DIR/build/bin/llama-quantize.exe" \
+    "$LLAMA_CPP_DIR/llama-quantize" \
+    "$LLAMA_CPP_DIR/llama-quantize.exe"; do
+    if [ -x "$candidate" ]; then
+      QUANTIZE_BIN="$candidate"
+      break
+    fi
+  done
+  if [ -z "$QUANTIZE_BIN" ]; then
+    echo "llama-quantize 실행 파일을 찾을 수 없습니다."
+    echo "LLAMA_QUANTIZE_BIN 환경변수로 경로를 직접 지정하세요 (스크립트 상단 주석 참고)."
+    exit 1
+  fi
 fi
 "$QUANTIZE_BIN" \
   "$OUT_DIR/${MODEL_NAME}-f16.gguf" \
