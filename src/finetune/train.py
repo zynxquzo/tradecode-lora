@@ -158,13 +158,37 @@ def build_log_callback(log_writer: TrainingLogWriter):
     return LogCallback()
 
 
+def build_trainer_class():
+    """trl 0.24.0의 SFTTrainer.compute_loss는 loss 계산과 무관하게 outputs.logits로
+    entropy/token-accuracy를 추가로 로깅하는데(use_liger_kernel이 아니면 무조건 실행),
+    unsloth는 VRAM 절약을 위해 outputs.logits를 지연 계산용 콜러블로 반환한다.
+    UNSLOTH_RETURN_LOGITS=1로 실제 텐서를 강제해도, eval 스텝을 한 번 통과하면서
+    torch.compile이 그 분기를 다르게(logits 미반환) 캐싱해버려 재발한다(재현: 첫
+    eval_steps 직후 학습 스텝에서 크래시). entropy/accuracy 로깅은 진단용일 뿐 loss
+    계산에는 쓰이지 않으므로(unsloth가 hidden_states에서 직접 fused loss를 계산),
+    compute_loss를 상위 transformers.Trainer 버전으로 완전히 우회해 outputs.logits
+    자체를 건드리지 않게 한다 - unsloth의 지연 logits/재컴파일 문제와 무관해진다."""
+    from transformers import Trainer
+    from trl import SFTTrainer
+
+    class UnslothCompatSFTTrainer(SFTTrainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            return Trainer.compute_loss(
+                self, model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch
+            )
+
+    return UnslothCompatSFTTrainer
+
+
 def run(args: argparse.Namespace) -> None:
     # Unsloth/trl/transformers는 GPU 환경(Colab 등)에서만 설치되어 있다고 가정하고
     # 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만 해도 에러 나지 않도록).
     from datasets import Dataset
     from transformers import EarlyStoppingCallback
-    from trl import SFTConfig, SFTTrainer
+    from trl import SFTConfig
     from unsloth import FastLanguageModel
+
+    TrainerClass = build_trainer_class()
 
     logger.info("베이스 모델 로드: %s", args.base_model)
     # 이 max_seq_length는 unsloth FastLanguageModel 고유 파라미터(모델/토크나이저 로드 시
@@ -262,7 +286,7 @@ def run(args: argparse.Namespace) -> None:
         report_to="none",
     )
 
-    trainer = SFTTrainer(
+    trainer = TrainerClass(
         model=model,
         processing_class=tokenizer,
         train_dataset=train_ds,
