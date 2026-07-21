@@ -1,0 +1,9 @@
+# src/finetune/train.py, merge_adapter.py 전용 — GPU 환경(Colab T4 등)에서만 설치.
+# 로컬 머신은 CUDA GPU가 없어 requirements.txt와 분리했다.
+unsloth
+transformers
+trl
+peft
+accelerate
+bitsandbytes
+datasets
