@@ -18,6 +18,12 @@ trl API 노트 (0.24.0 기준, 아래 코드가 이미 반영함):
   - trl이 이후 버전에서 이 파라미터명을 또 바꾸면 이 스크립트도 같이 고쳐야 한다 —
     requirements-colab.txt에서 trl 버전을 고정해 두었으니, 원인 불명의 TypeError가
     나면 먼저 `pip show trl`로 실제 설치된 버전이 0.24.0인지부터 확인할 것.
+  - dataset.map()은 num_proc이 정수면(1이라도) multiprocessing.Pool을 거치는데, 그
+    과정에서 unsloth가 건드려놓은 torch._dynamo.config(pickle 불가능한
+    ConfigModuleInstance)까지 클로저에 딸려가 TypeError로 죽는다. dataset_num_proc
+    값을 조정하는 대신, tokenize_records()로 미리 토큰화해 데이터셋에 input_ids
+    컬럼을 채워 넘긴다 - trl이 이미 토큰화된 데이터셋으로 인식해 그 map() 경로
+    자체를 건너뛴다.
 
 학습 데이터 포맷은 baseline_eval.py의 zero-shot 프롬프트와 다르다 — baseline은
 "Top-3 JSON 배열"을 요구하지만, 학습 데이터(data/processed/train.jsonl)에는 레코드당
@@ -71,6 +77,26 @@ def to_training_text(rec: dict, eos_token: str) -> str:
         instruction=rec["instruction"], input=rec["input"], response=response_json
     )
     return text + eos_token
+
+
+def tokenize_records(records: list[dict], tokenizer, max_seq_length: int, eos_token: str) -> list[list[int]]:
+    """SFTTrainer의 내부 dataset.map() 토큰화 단계를 쓰지 않고 직접 토큰화한다.
+    trl 0.24.0의 dataset.map()은 num_proc이 정수면(1이라도) multiprocessing.Pool을
+    거치는데, 그 과정에서 unsloth가 건드려놓은 torch._dynamo.config
+    (pickle 불가능한 ConfigModuleInstance)까지 클로저에 딸려 들어가 직렬화에
+    실패한다. 데이터셋에 input_ids 컬럼이 이미 있으면 trl이 "이미 토큰화된
+    데이터셋"으로 보고 포맷/EOS추가/토큰화 map 단계를 전부 건너뛰므로, 여기서
+    미리(단일 프로세스 for-loop로) 토큰화해 그 경로 자체를 피한다. 880건 규모라
+    for-loop로도 충분히 빠르다."""
+    return [
+        tokenizer(
+            to_training_text(rec, eos_token),
+            truncation=True,
+            max_length=max_seq_length,
+            add_special_tokens=True,
+        )["input_ids"]
+        for rec in records
+    ]
 
 
 def internal_train_val_split(records: list[dict], val_ratio: float, seed: int) -> tuple[list[dict], list[dict]]:
@@ -152,10 +178,14 @@ def run(args: argparse.Namespace) -> None:
     logger.info("내부 분리: train=%d건, val(early stopping 모니터링용)=%d건", len(train_records), len(val_records))
 
     eos_token = tokenizer.eos_token
-    train_ds = Dataset.from_list(
-        [{"text": to_training_text(r, eos_token)} for r in train_records]
+    # input_ids를 직접 채워서 넘긴다 (이유: tokenize_records 참고) - SFTTrainer가
+    # 이미 토큰화된 데이터셋으로 인식해 내부 map() 토큰화 단계를 건너뛴다.
+    train_ds = Dataset.from_dict(
+        {"input_ids": tokenize_records(train_records, tokenizer, args.max_seq_length, eos_token)}
     )
-    val_ds = Dataset.from_list([{"text": to_training_text(r, eos_token)} for r in val_records])
+    val_ds = Dataset.from_dict(
+        {"input_ids": tokenize_records(val_records, tokenizer, args.max_seq_length, eos_token)}
+    )
 
     run_config = {
         "base_model": args.base_model,
@@ -204,16 +234,17 @@ def run(args: argparse.Namespace) -> None:
         weight_decay=0.01,
         lr_scheduler_type="linear",
         seed=args.seed,
-        dataset_text_field="text",
+        # dataset_text_field/dataset_num_proc은 여기서 의미가 없다: train_ds/val_ds에
+        # input_ids를 이미 채워 넘기므로(tokenize_records 참고) trl이 "이미 토큰화된
+        # 데이터셋"으로 인식해 텍스트 필드 참조나 map()/multiprocessing 자체를 타지
+        # 않는다 (num_proc=1이라도 Pool을 거치며 pickle 문제가 재발하는 걸 피하려는
+        # 목적도 겸함 - 이전엔 num_proc이라도 Pool을 쓰면 unsloth가 건드린
+        # torch._dynamo.config(ConfigModuleInstance)가 클로저에 딸려가 pickle에
+        # 실패했었다).
         max_length=args.max_seq_length,
         fp16=True,
         bf16=False,
         report_to="none",
-        # dataset_num_proc 기본값(None)이면 trl이 datasets.map()을 멀티프로세스로 돌리는데,
-        # unsloth로 패치된 모델/설정 객체를 워커 프로세스로 넘기려다 dill이
-        # pickle하지 못해 TypeError('ConfigModuleInstance')가 난다. 880건 규모라
-        # 단일 프로세스로도 충분히 빠르므로 1로 고정해 멀티프로세싱 자체를 피한다.
-        dataset_num_proc=1,
     )
 
     trainer = SFTTrainer(
