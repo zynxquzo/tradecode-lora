@@ -342,8 +342,14 @@ def run(args: argparse.Namespace) -> None:
     tokenizer.save_pretrained(str(adapter_dir))
     logger.info("LoRA adapter 저장 완료: %s", adapter_dir)
     logger.info("학습 로그: %s", args.training_log)
+    # merge_adapter.py는 4bit 베이스(--base-model)를 거부한다 - 학습에 쓴
+    # args.base_model(보통 unsloth/gemma-2-2b-bnb-4bit)을 그대로 안내하면 바로
+    # 에러가 나므로, merge 단계 기본값(풀 정밀도 unsloth/gemma-2-2b)을 쓰라고
+    # 안내한다. --base-model을 생략하면 그 기본값이 적용된다.
     logger.info(
-        "다음 단계: python src/finetune/merge_adapter.py --adapter-dir %s --base-model %s",
+        "다음 단계: python src/finetune/merge_adapter.py --adapter-dir %s "
+        "(--base-model은 생략 - 기본값이 풀 정밀도 모델을 가리킴. 학습에 쓴 4bit "
+        "베이스 %s를 merge에 그대로 쓰면 안 됨)",
         adapter_dir,
         args.base_model,
     )
