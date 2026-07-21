@@ -24,6 +24,14 @@ trl API 노트 (0.24.0 기준, 아래 코드가 이미 반영함):
     값을 조정하는 대신, tokenize_records()로 미리 토큰화해 데이터셋에 input_ids
     컬럼을 채워 넘긴다 - trl이 이미 토큰화된 데이터셋으로 인식해 그 map() 경로
     자체를 건너뛴다.
+  - trl 0.24.0의 SFTTrainer.compute_loss는 use_liger_kernel이 아니면 무조건
+    entropy_from_logits(outputs.logits)를 호출해 토큰 엔트로피를 로깅한다. 그런데
+    unsloth는 VRAM 절약을 위해 기본적으로 outputs.logits를 실제 텐서가 아니라
+    지연 계산용 콜러블로 반환해서("Unsloth: Will smartly offload gradients to
+    save VRAM!" 로그가 그 신호) entropy_from_logits가 `TypeError: 'function'
+    object is not subscriptable`로 죽는다. UNSLOTH_RETURN_LOGITS=1 환경변수를
+    unsloth를 import하기 전에 설정해 실제 logits 텐서를 돌려주도록 강제한다
+    (아래 모듈 최상단 참고).
 
 학습 데이터 포맷은 baseline_eval.py의 zero-shot 프롬프트와 다르다 — baseline은
 "Top-3 JSON 배열"을 요구하지만, 학습 데이터(data/processed/train.jsonl)에는 레코드당
@@ -42,8 +50,15 @@ early stopping에 사용한다.
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
+
+# unsloth가 VRAM 절약을 위해 outputs.logits를 지연 계산용 콜러블로 반환하는 것을
+# 막고 실제 텐서를 돌려받기 위한 설정 - trl 0.24.0의 entropy_from_logits 호환성
+# 문제(모듈 상단 trl API 노트 참고) 때문에 필요. unsloth를 import하기 전에
+# 설정해야 하므로 모듈 최상단에 둔다.
+os.environ.setdefault("UNSLOTH_RETURN_LOGITS", "1")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
