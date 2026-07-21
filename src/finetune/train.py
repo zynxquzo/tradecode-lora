@@ -209,6 +209,11 @@ def run(args: argparse.Namespace) -> None:
         fp16=True,
         bf16=False,
         report_to="none",
+        # dataset_num_proc 기본값(None)이면 trl이 datasets.map()을 멀티프로세스로 돌리는데,
+        # unsloth로 패치된 모델/설정 객체를 워커 프로세스로 넘기려다 dill이
+        # pickle하지 못해 TypeError('ConfigModuleInstance')가 난다. 880건 규모라
+        # 단일 프로세스로도 충분히 빠르므로 1로 고정해 멀티프로세싱 자체를 피한다.
+        dataset_num_proc=1,
     )
 
     trainer = SFTTrainer(
