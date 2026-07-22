@@ -20,10 +20,19 @@ trl API 노트 (0.24.0 기준, 아래 코드가 이미 반영함):
     나면 먼저 `pip show trl`로 실제 설치된 버전이 0.24.0인지부터 확인할 것.
   - dataset.map()은 num_proc이 정수면(1이라도) multiprocessing.Pool을 거치는데, 그
     과정에서 unsloth가 건드려놓은 torch._dynamo.config(pickle 불가능한
-    ConfigModuleInstance)까지 클로저에 딸려가 TypeError로 죽는다. dataset_num_proc
-    값을 조정하는 대신, tokenize_records()로 미리 토큰화해 데이터셋에 input_ids
-    컬럼을 채워 넘긴다 - trl이 이미 토큰화된 데이터셋으로 인식해 그 map() 경로
-    자체를 건너뛴다.
+    ConfigModuleInstance)까지 클로저에 딸려가 TypeError로 죽는다.
+    SFTConfig(dataset_num_proc=None)을 명시해 Pool 자체를 안 타는 진짜 단일
+    프로세스 경로로 강제한다 (num_proc=1도 여전히 Pool(1)을 쓰므로 안 됨 - None만
+    Pool을 건너뜀).
+  - (오진단 기록) 한때 데이터셋을 직접 토큰화해 input_ids만 넘기고 trl의 라벨 생성을
+    건너뛰게 한 적이 있었는데, loss가 24대에서 시작해 3 epoch 내내 8~9대에 머무는
+    걸 보고 그 우회가 원인이라 의심해 text 기반 파이프라인으로 되돌렸었다. 하지만
+    되돌린 뒤에도 동일한 loss 곡선이 그대로 재현됐다 - 그 우회는 원인이 아니었다.
+    진짜 원인은 프롬프트 전체(Instruction+Input+Response)에 대해 loss를 계산해서,
+    매번 거의 동일한 Instruction/Input 부분(예측하기 쉬움)이 실제로 배워야 할 JSON
+    응답 부분의 학습 신호를 희석시킨 것이었다. prompt/completion 컬럼을 분리하고
+    SFTConfig(completion_only_loss=True)로 completion(응답)에만 loss를 매기도록
+    고쳤다 - to_prompt_completion() 참고.
   - trl 0.24.0의 SFTTrainer.compute_loss는 use_liger_kernel이 아니면 무조건
     entropy_from_logits(outputs.logits)와 토큰 정확도 계산으로 outputs.logits를
     두 번 더 쓴다. unsloth는 VRAM 절약을 위해 outputs.logits를 지연 계산용
@@ -76,7 +85,9 @@ if hasattr(sys.stdout, "reconfigure"):
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# src/eval/baseline_eval.py의 finetuned 프롬프트 스타일과 반드시 동일해야 함
+# src/eval/baseline_eval.py의 FINETUNED_PROMPT_TEMPLATE과 반드시 동일해야 함 (그쪽은
+# response 없이 "### Response:\n"까지만 있는 추론용 프롬프트 - 이 PROMPT_TEMPLATE의
+# {response} 앞부분과 정확히 일치해야 학습/추론 프롬프트가 어긋나지 않는다)
 PROMPT_TEMPLATE = """### Instruction:
 {instruction}
 
@@ -84,7 +95,7 @@ PROMPT_TEMPLATE = """### Instruction:
 {input}
 
 ### Response:
-{response}"""
+"""
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -97,32 +108,15 @@ def load_jsonl(path: Path) -> list[dict]:
     return records
 
 
-def to_training_text(rec: dict, eos_token: str) -> str:
-    response_json = json.dumps(rec["output"], ensure_ascii=False)
-    text = PROMPT_TEMPLATE.format(
-        instruction=rec["instruction"], input=rec["input"], response=response_json
-    )
-    return text + eos_token
-
-
-def tokenize_records(records: list[dict], tokenizer, max_seq_length: int, eos_token: str) -> list[list[int]]:
-    """SFTTrainer의 내부 dataset.map() 토큰화 단계를 쓰지 않고 직접 토큰화한다.
-    trl 0.24.0의 dataset.map()은 num_proc이 정수면(1이라도) multiprocessing.Pool을
-    거치는데, 그 과정에서 unsloth가 건드려놓은 torch._dynamo.config
-    (pickle 불가능한 ConfigModuleInstance)까지 클로저에 딸려 들어가 직렬화에
-    실패한다. 데이터셋에 input_ids 컬럼이 이미 있으면 trl이 "이미 토큰화된
-    데이터셋"으로 보고 포맷/EOS추가/토큰화 map 단계를 전부 건너뛰므로, 여기서
-    미리(단일 프로세스 for-loop로) 토큰화해 그 경로 자체를 피한다. 880건 규모라
-    for-loop로도 충분히 빠르다."""
-    return [
-        tokenizer(
-            to_training_text(rec, eos_token),
-            truncation=True,
-            max_length=max_seq_length,
-            add_special_tokens=True,
-        )["input_ids"]
-        for rec in records
-    ]
+def to_prompt_completion(rec: dict) -> tuple[str, str]:
+    """trl의 completion-only loss masking(SFTConfig(completion_only_loss=True))은
+    prompt/completion 컬럼이 분리된 데이터셋에서만 적용된다. Instruction/Input
+    부분(매 예제마다 거의 동일해 예측하기 쉬움)에는 loss를 매기지 않고, 실제로 배워야
+    할 JSON 응답 부분에만 loss를 집중시키기 위해 분리한다. EOS는 trl이 completion에
+    자동으로 붙여주므로 여기서 넣지 않는다."""
+    prompt = PROMPT_TEMPLATE.format(instruction=rec["instruction"], input=rec["input"])
+    completion = json.dumps(rec["output"], ensure_ascii=False)
+    return prompt, completion
 
 
 def internal_train_val_split(records: list[dict], val_ratio: float, seed: int) -> tuple[list[dict], list[dict]]:
@@ -241,15 +235,16 @@ def run(args: argparse.Namespace) -> None:
     train_records, val_records = internal_train_val_split(records, args.val_ratio, args.seed)
     logger.info("내부 분리: train=%d건, val(early stopping 모니터링용)=%d건", len(train_records), len(val_records))
 
-    eos_token = tokenizer.eos_token
-    # input_ids를 직접 채워서 넘긴다 (이유: tokenize_records 참고) - SFTTrainer가
-    # 이미 토큰화된 데이터셋으로 인식해 내부 map() 토큰화 단계를 건너뛴다.
-    train_ds = Dataset.from_dict(
-        {"input_ids": tokenize_records(train_records, tokenizer, args.max_seq_length, eos_token)}
-    )
-    val_ds = Dataset.from_dict(
-        {"input_ids": tokenize_records(val_records, tokenizer, args.max_seq_length, eos_token)}
-    )
+    # prompt/completion으로 분리해서 넘기고, 포맷/EOS추가/토큰화/라벨 생성(completion에만
+    # loss를 매기는 마스킹 포함)은 trl의 검증된 내부 파이프라인에 맡긴다.
+    def to_records(recs: list[dict]) -> list[dict]:
+        return [
+            {"prompt": prompt, "completion": completion}
+            for prompt, completion in (to_prompt_completion(r) for r in recs)
+        ]
+
+    train_ds = Dataset.from_list(to_records(train_records))
+    val_ds = Dataset.from_list(to_records(val_records))
 
     run_config = {
         "base_model": args.base_model,
@@ -298,13 +293,18 @@ def run(args: argparse.Namespace) -> None:
         weight_decay=0.01,
         lr_scheduler_type="linear",
         seed=args.seed,
-        # dataset_text_field/dataset_num_proc은 여기서 의미가 없다: train_ds/val_ds에
-        # input_ids를 이미 채워 넘기므로(tokenize_records 참고) trl이 "이미 토큰화된
-        # 데이터셋"으로 인식해 텍스트 필드 참조나 map()/multiprocessing 자체를 타지
-        # 않는다 (num_proc=1이라도 Pool을 거치며 pickle 문제가 재발하는 걸 피하려는
-        # 목적도 겸함 - 이전엔 num_proc이라도 Pool을 쓰면 unsloth가 건드린
-        # torch._dynamo.config(ConfigModuleInstance)가 클로저에 딸려가 pickle에
-        # 실패했었다).
+        # prompt/completion 데이터셋에서만 적용됨(dataset_text_field는 language-modeling
+        # 형식용이라 여기선 안 씀). Instruction/Input 부분(매번 거의 동일해 예측하기
+        # 쉬움)은 loss에서 제외하고 실제로 배워야 할 completion(JSON 응답)에만 loss를
+        # 집중시킨다 - 이게 없으면 전체 시퀀스 평균 loss에 쉬운 boilerplate가 희석돼
+        # 학습 신호가 약해진다.
+        completion_only_loss=True,
+        # num_proc이 정수면(1이라도) datasets.map()이 multiprocessing.Pool을 거치며
+        # unsloth가 건드린 torch._dynamo.config(ConfigModuleInstance)가 pickle에
+        # 실패한다 - None만 진짜 단일 프로세스 경로(Pool 자체를 안 씀)를 탄다.
+        # Unsloth가 SFTConfig 기본값을 몰래 다른 값으로 주입하는 경우가 있어
+        # 명시적으로 None을 강제한다.
+        dataset_num_proc=None,
         max_length=args.max_seq_length,
         fp16=True,
         bf16=False,
@@ -342,17 +342,10 @@ def run(args: argparse.Namespace) -> None:
     tokenizer.save_pretrained(str(adapter_dir))
     logger.info("LoRA adapter 저장 완료: %s", adapter_dir)
     logger.info("학습 로그: %s", args.training_log)
-    # merge_adapter.py는 4bit 베이스(--base-model)를 거부한다 - 학습에 쓴
-    # args.base_model(보통 unsloth/gemma-2-2b-bnb-4bit)을 그대로 안내하면 바로
-    # 에러가 나므로, merge 단계 기본값(풀 정밀도 unsloth/gemma-2-2b)을 쓰라고
-    # 안내한다. --base-model을 생략하면 그 기본값이 적용된다.
-    logger.info(
-        "다음 단계: python src/finetune/merge_adapter.py --adapter-dir %s "
-        "(--base-model은 생략 - 기본값이 풀 정밀도 모델을 가리킴. 학습에 쓴 4bit "
-        "베이스 %s를 merge에 그대로 쓰면 안 됨)",
-        adapter_dir,
-        args.base_model,
-    )
+    # merge_adapter.py는 이제 unsloth의 FastLanguageModel.from_pretrained(adapter_dir)로
+    # base_model_name_or_path(adapter_config.json에 기록됨)까지 자동으로 찾아 불러오므로
+    # --base-model 인자 자체가 없다.
+    logger.info("다음 단계: python src/finetune/merge_adapter.py --adapter-dir %s", adapter_dir)
 
 
 def parse_args() -> argparse.Namespace:
@@ -369,7 +362,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=10,
+        help="EarlyStoppingCallback(patience=1)이 eval_loss 정체 시 조기 종료하므로 넉넉히 잡음 "
+        "(completion-only loss 도입 전 3 epoch로는 loss가 8대에서 못 벗어났음)",
+    )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-accumulation", type=int, default=4)
     parser.add_argument("--max-seq-length", type=int, default=1024)
