@@ -22,4 +22,14 @@ data/processed/*.jsonl
 .env
 
 # OS
-.DS_Storekaggle.json
+.DS_Store
+
+# 시크릿
+kaggle.json
+
+# 로컬 스크래치 (GGUF 변환/양자화 작업용, 재생성 가능)
+llama.cpp/
+merged_model/
+merged_model*.zip
+_*.py
+_*.txt

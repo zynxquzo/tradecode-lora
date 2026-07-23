@@ -2,8 +2,8 @@
 
 - Model: `tradecode-gemma2`
 - Prompt style: `finetuned`
-- Samples: 280
-- Generated at: 2026-07-23T10:07:23+09:00
+- Samples: 20
+- Generated at: 2026-07-23T04:21:09+09:00
 
 ## Metrics
 
