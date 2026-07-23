@@ -5,7 +5,6 @@
 | 항목 | 내용 |
 |---|---|
 | 프로젝트명 | TradeCode-LoRA |
-| 기간 | 3일 (Day1: 데이터, Day2: 학습, Day3: 서빙+정리) |
 | 목표 | 상품설명 → HS코드 Top-3 추천 파인튜닝 모델 개발 및 로컬 서빙 |
 | 베이스 모델 | google/gemma-2-2b (HF) → 학습 후 GGUF 변환 → Ollama 서빙 |
 | 차별화 포인트 | RAG/에이전트 위주였던 기존 포트폴리오 대비 "직접 파인튜닝" 역량 증명 |
@@ -18,7 +17,7 @@
 
 ## 3. 데이터 설계
 
-**범위 축소**: 3일 스케일 고려해 **섬유·의류 품목(HS 제61~62류)** 한 챕터로 한정
+**범위 축소**: 프로젝트 규모 고려해 **섬유·의류 품목(HS 제61~62류)** 한 챕터로 한정
 
 ### 소스 후보
 - 관세청 품목분류 사전회시 사례 (관세법령정보포털, tariff.go.kr)
@@ -96,21 +95,7 @@ tradecode-lora/
 └── README.md
 ```
 
-## 8. 3일 일정
-
-| 시점 | 작업 | 산출물 |
-|---|---|---|
-| Day1 오전 | 데이터 소스 확정, 수집 | data/raw |
-| Day1 오후 | 전처리, instruction 포맷 변환, train/eval 분리 | data/processed |
-| Day1 저녁 | Baseline(zero-shot) 성능 측정 | docs/baseline_result.md |
-| Day2 오전 | LoRA 학습 환경 세팅, 학습 실행 | checkpoints |
-| Day2 오후 | GGUF 변환, Ollama 등록, 로딩 확인 | Modelfile |
-| Day2 저녁 | Fine-tuned 성능 측정, baseline 비교 | docs/eval_result.md |
-| Day3 오전 | FastAPI 래핑, 후처리 로직 | src/serving |
-| Day3 오후 | 최소 데모(Streamlit or curl 데모) | demo |
-| Day3 저녁 | 실험일지·README 정리, 포트폴리오용 지표/다이어그램 정리 | docs/*, README.md |
-
-## 9. 리스크 및 대응
+## 8. 리스크 및 대응
 
 - **데이터 부족/품질**: 공개 사전회시 데이터가 예상보다 적으면 범위를 61류(편물) 하나로 더 좁히거나, 수출입통계 매핑 데이터로 보강
 - **GGUF 변환 이슈**: llama.cpp 버전 호환성 문제 대비, Ollama 공식 gemma2 Modelfile 예시 먼저 확인
