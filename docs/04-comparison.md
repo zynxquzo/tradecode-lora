@@ -10,7 +10,7 @@
 
 (fine-tuned: `docs/03-finetuned_result.md`, 280건 전체, `tradecode-gemma2` Q4_K_M, 2026-07-23)
 
-## 무슨 일이 있었나
+## 학습 경과 및 원인 분석
 
 880건/LoRA r=16/3 epoch 기본 설정으로 처음 학습했을 때 eval loss가 `ln(vocab_size)`보다도
 높은 값(24대)에서 시작해 3 epoch 내내 8~9대에 머물렀다. 원인은 프롬프트 전체
@@ -57,7 +57,7 @@ epoch을 10으로 늘려 재학습하자 eval loss가 8.88 → 4.09까지 꾸준
   배운" 상태를 정확히 보여주는 지표라, 오히려 실패 양상을 명확히 설명하는 근거로
   쓸 수 있다.
 
-## 다음에 시도해볼 것 (시간이 더 있다면)
+## 향후 개선 방향
 
 1. LoRA target_modules에 `gate_proj, up_proj, down_proj` 추가
 2. LoRA rank를 16 → 32 이상으로 확대
@@ -65,12 +65,12 @@ epoch을 10으로 늘려 재학습하자 eval loss가 8.88 → 4.09까지 꾸준
 4. epoch을 더 늘리되(현재 10에서 eval loss가 아직 완만하게 개선 중이었음) 과적합
    여부를 eval loss뿐 아니라 실제 숫자 생성 성공률로도 모니터링
 
-## 포트폴리오 서사로서의 정리
+## 결론
 
-이번 프로젝트는 "파인튜닝으로 정확도를 올렸다"는 결과 대신, **왜 초기 시도가 실패했고
-어떻게 원인을 좁혀갔는지**(entropy_from_logits 호환성, SFTConfig 클래스 identity
-불일치, dataset.map() 멀티프로세싱 pickling, 그리고 결정적으로 completion-only loss
-masking 도입까지) 자체가 더 뚜렷한 학습 곡선을 보여준다. loss 개선(perplexity
-~6500→~60)과 실제 태스크 성능 미개선(정확도 0%) 사이의 간극은, "loss가 떨어진다고
-과제를 잘 푸는 건 아니다"라는 실무적으로 중요한 교훈을 정량적으로 보여주는 사례로
-정리할 수 있다.
+정확도 지표 자체는 baseline 대비 개선되지 않았지만, 그 과정에서 trl/unsloth 버전
+호환성 문제(entropy_from_logits 호환성, SFTConfig 클래스 identity 불일치,
+dataset.map() 멀티프로세싱 pickling 등)를 근본 원인까지 추적해 해결했고,
+completion-only loss masking 도입 전후로 loss가 크게 달라지는 것도 확인했다.
+loss 개선(perplexity 약 6500→약 60)과 실제 태스크 성능 미개선(정확도 0%) 사이의
+간극은, "loss가 떨어진다고 과제를 잘 푸는 건 아니다"라는 점을 정량적으로 보여주는
+사례로 볼 수 있다.
