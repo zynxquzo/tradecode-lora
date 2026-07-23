@@ -1,25 +1,97 @@
 # 파인튜닝 학습 로그
 
-이 파일은 `src/finetune/train.py`가 실행될 때 자동으로 덮어써지고, step/epoch별
-loss가 실시간으로 append된다 (`TrainingLogWriter` 참고). 아래는 로컬에 GPU가 없어
-아직 실행 전 상태의 플레이스홀더다.
+Kaggle Notebook(GPU T4x2)에서 `src/finetune/train.py`로 학습했다. 아래는 최종
+(completion-only loss masking 적용 후) 실행 결과이며, 그 전에 겪은 시행착오는
+`docs/04-comparison.md`의 "무슨 일이 있었나" 절에 정리했다.
 
-## 실행 방법 (Colab, T4 GPU)
+## 학습 설정 (최종)
 
-```
-!pip install unsloth transformers trl peft accelerate bitsandbytes
+- base_model: unsloth/gemma-2-2b-bnb-4bit
+- lora_r: 16, lora_alpha: 32
+- target_modules: q_proj, k_proj, v_proj, o_proj
+- learning_rate: 2e-4, epochs: 10 (EarlyStoppingCallback patience=1, 발동 안 하고 10 epoch 끝까지 진행)
+- batch_size: 4, grad_accumulation: 4 (유효 배치 16)
+- completion_only_loss: True (JSON 응답 부분에만 loss 계산)
+- train_records: 792, val_records: 88 (train.jsonl 내부 90/10 분리)
 
-# 1) 스모크 테스트 (50~60 step, loss가 정상적으로 떨어지는지만 확인)
-!python src/finetune/train.py --smoke-test --max-steps 60
+## 스모크 테스트 (--smoke-test --max-steps 60, 사전 확인용)
 
-# 2) 스모크 테스트 통과 후 전체 학습 (eval loss 기준 early stopping 포함)
-!python src/finetune/train.py
-```
+| step | loss |
+|---|---|
+| 1 | 22.9140 |
+| 2 | 22.6132 |
+| 3 | 22.5210 |
+| 4 | 22.1818 |
+| 5 | 21.3698 |
+| 6 | 20.0187 |
+| 7 | 19.4297 |
+| 8 | 19.5321 |
+| 9 | 18.3656 |
+| ... | (60 step까지 계속 하강, 스케줄러가 60 step 기준이라 후반부는 LR이 0 근처로 수렴) |
+| 60 근방 (epoch ~1.2) | 10.2 ~ 10.75 |
 
-## 기록할 항목 (실행 후 이 섹션을 실제 로그로 교체)
+60 step 안에서도 이전 시도(전체 시퀀스 loss, 24대 시작)보다 확연히 빠르게 떨어지는 것을
+확인하고 전체 학습으로 진행.
 
-- 학습 설정 (base model, LoRA r/alpha, lr, epoch, batch size)
-- step별 train loss, epoch별 eval loss
-- early stopping이 실제로 발동했는지 (몇 epoch에서 멈췄는지)
-- 총 학습 소요 시간
-- 최종 adapter 저장 경로 (`outputs/adapter`)
+## 전체 학습 (10 epoch, 500 step)
+
+| step | train loss | eval loss |
+|---|---|---|
+| 10 | 20.4779 | - |
+| 20 | 13.9982 | - |
+| 30 | 11.8805 | - |
+| 40 | 10.7765 | - |
+| 50 | 9.4000 | 8.8753 |
+| 60 | 8.2687 | - |
+| 70 | 7.7203 | - |
+| 80 | 7.2559 | - |
+| 90 | 6.9400 | - |
+| 100 | 6.7578 | 6.6284 |
+| 110 | 6.5031 | - |
+| 120 | 6.2910 | - |
+| 130 | 5.9275 | - |
+| 140 | 5.7691 | - |
+| 150 | 5.6395 | 5.5761 |
+| 160 | 5.4324 | - |
+| 170 | 5.2824 | - |
+| 180 | 5.1505 | - |
+| 190 | 5.0392 | - |
+| 200 | 4.9635 | 4.9616 |
+| 210 | 4.9029 | - |
+| 220 | 4.8300 | - |
+| 230 | 4.6663 | - |
+| 240 | 4.6374 | - |
+| 250 | 4.5843 | 4.6191 |
+| 260 | 4.4995 | - |
+| 270 | 4.4958 | - |
+| 280 | 4.4247 | - |
+| 290 | 4.4215 | - |
+| 300 | 4.4116 | 4.4031 |
+| 310 | 4.3319 | - |
+| 320 | 4.3146 | - |
+| 330 | 4.2751 | - |
+| 340 | 4.2127 | - |
+| 350 | 4.2231 | 4.2600 |
+| 360 | 4.1022 | - |
+| 370 | 4.2076 | - |
+| 380 | 4.1077 | - |
+| 390 | 4.1554 | - |
+| 400 | 4.2092 | 4.1663 |
+| 410 | 4.1173 | - |
+| 420 | 4.0474 | - |
+| 430 | 4.0864 | - |
+| 440 | 4.0938 | - |
+| 450 | 4.0469 | 4.1115 |
+| 460 | 4.0496 | - |
+| 470 | 4.1457 | - |
+| 480 | 4.0228 | - |
+| 490 | 3.9961 | - |
+| 500 | 3.9824 | 4.0918 |
+
+- eval loss는 매 평가 시점(50 step마다)마다 계속 개선되어(8.88 → 4.09) EarlyStopping이
+  한 번도 발동하지 않고 10 epoch 전 구간이 정상적으로 끝났다.
+- perplexity로 환산하면 약 6500(completion-only masking 도입 전) → 약 60(도입 후)으로,
+  파인튜닝이 실제로 유의미한 학습을 했다는 정량적 신호다.
+- 다만 이 loss 개선이 실제 HS코드 숫자 생성 능력으로는 이어지지 않았다 — 자세한 내용과
+  원인 분석은 `docs/04-comparison.md` 참고.
+- 최종 adapter 저장 경로: (Kaggle 세션 기준) `/kaggle/working/outputs/adapter`
