@@ -33,3 +33,6 @@ merged_model/
 merged_model*.zip
 _*.py
 _*.txt
+
+# 개인 노트 (비공개)
+docs/PERSONAL_NOTES.md
