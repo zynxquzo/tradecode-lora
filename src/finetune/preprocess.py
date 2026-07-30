@@ -1,6 +1,7 @@
 """
 data/processed/augmented.jsonl(원본+패러프레이징 증강본)을 instruction/input/output
-포맷으로 변환하고, 6자리 HS코드 기준 stratified train/eval(80/20) split을 수행하는 스크립트.
+포맷으로 변환하고, --code-length 자리(기본 6자리) HS코드 기준 stratified train/eval(80/20)
+split을 수행하는 스크립트.
 
 augmented.jsonl의 각 라인 형식(augment.py 출력):
   {"description": str, "hs_code": str(6자리), "confidence_basis": str, "is_augmented": bool}
@@ -27,9 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-INSTRUCTION_TEXT = "다음 상품설명에 해당하는 HS코드를 6자리까지 추천하고 근거를 설명하세요."
-
-HS_CODE_LEN = 6
+DEFAULT_CODE_LENGTH = 6
 
 
 def load_augmented_records(path: Path) -> list[dict]:
@@ -42,19 +41,22 @@ def load_augmented_records(path: Path) -> list[dict]:
     return records
 
 
-def normalize_hs_code(raw_code: str) -> str | None:
-    """HS코드를 숫자만 남긴 6자리 문자열로 정규화. 유효하지 않으면 None."""
+def normalize_hs_code(raw_code: str, code_length: int) -> str | None:
+    """HS코드를 숫자만 남긴 code_length자리 문자열로 정규화. 유효하지 않으면 None."""
     if raw_code is None:
         return None
     digits = "".join(ch for ch in str(raw_code) if ch.isdigit())
-    if len(digits) < HS_CODE_LEN:
+    if len(digits) < code_length:
         return None
-    return digits[:HS_CODE_LEN]
+    return digits[:code_length]
 
 
-def to_schema_record(description: str, hs_code: str, confidence_basis: str) -> dict:
+def to_schema_record(
+    description: str, hs_code: str, confidence_basis: str, code_length: int
+) -> dict:
+    instruction = f"다음 상품설명에 해당하는 HS코드를 {code_length}자리까지 추천하고 근거를 설명하세요."
     return {
-        "instruction": INSTRUCTION_TEXT,
+        "instruction": instruction,
         "input": description.strip(),
         "output": {
             "hs_code": hs_code,
@@ -63,18 +65,20 @@ def to_schema_record(description: str, hs_code: str, confidence_basis: str) -> d
     }
 
 
-def convert_records(raw_records: list[dict]) -> tuple[list[dict], int]:
+def convert_records(raw_records: list[dict], code_length: int) -> tuple[list[dict], int]:
     """augmented 레코드를 스키마 포맷으로 변환. is_augmented 플래그는 별도로 유지해
     split 단계에서 eval 우선순위 결정에 사용한다. (변환 결과, 스킵 개수) 반환."""
     converted = []
     skipped = 0
     for rec in raw_records:
         description = (rec.get("description") or "").strip()
-        hs_code = normalize_hs_code(rec.get("hs_code"))
+        hs_code = normalize_hs_code(rec.get("hs_code"), code_length)
         if not description or not hs_code:
             skipped += 1
             continue
-        schema_rec = to_schema_record(description, hs_code, rec.get("confidence_basis", ""))
+        schema_rec = to_schema_record(
+            description, hs_code, rec.get("confidence_basis", ""), code_length
+        )
         schema_rec["_is_augmented"] = bool(rec.get("is_augmented", False))
         converted.append(schema_rec)
     return converted, skipped
@@ -154,12 +158,18 @@ def write_jsonl(records: list[dict], path: Path) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
-def run(input_path: Path, output_dir: Path, eval_ratio: float = 0.2, seed: int = 42) -> None:
+def run(
+    input_path: Path,
+    output_dir: Path,
+    eval_ratio: float = 0.2,
+    seed: int = 42,
+    code_length: int = DEFAULT_CODE_LENGTH,
+) -> None:
     logger.info("증강 데이터 로드: %s", input_path)
     raw_records = load_augmented_records(input_path)
     logger.info("원본 레코드 수: %d", len(raw_records))
 
-    converted, skipped = convert_records(raw_records)
+    converted, skipped = convert_records(raw_records, code_length)
     logger.info("변환 완료: %d건 성공, %d건 스킵(description/hs_code 누락)", len(converted), skipped)
 
     if not converted:
@@ -195,9 +205,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--eval-ratio", type=float, default=0.2, help="eval 비율 (기본 0.2)")
     parser.add_argument("--seed", type=int, default=42, help="셔플 시드")
+    parser.add_argument(
+        "--code-length",
+        type=int,
+        default=DEFAULT_CODE_LENGTH,
+        help="split/instruction 문구 기준이 되는 HS코드 자릿수 (기본 6, 예: 4=호 단위)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run(args.input, args.output_dir, args.eval_ratio, args.seed)
+    run(args.input, args.output_dir, args.eval_ratio, args.seed, args.code_length)

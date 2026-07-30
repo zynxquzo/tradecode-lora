@@ -72,6 +72,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 # unsloth가 VRAM 절약을 위해 outputs.logits를 지연 계산용 콜러블로 반환하는 것을
@@ -132,20 +133,30 @@ def internal_train_val_split(records: list[dict], val_ratio: float, seed: int) -
 
 
 class TrainingLogWriter:
-    """step별 loss / epoch별 eval_loss를 docs/02-training_log.md에 실시간으로 append."""
+    """step별 loss / epoch별 eval_loss를 docs/02-training_log.md에 실시간으로 append.
+    Kaggle 세션 시간 예산을 실측으로 검증할 수 있도록 각 행에 학습 시작 이후 경과 분도
+    같이 남긴다(elapsed_min)."""
 
     def __init__(self, output_path: Path, run_config: dict):
         self.output_path = output_path
+        self.start_time = time.monotonic()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         header = ["# 파인튜닝 학습 로그", "", "## 학습 설정", ""]
         for k, v in run_config.items():
             header.append(f"- {k}: {v}")
-        header += ["", "## Loss", "", "| step/epoch | 구분 | loss |", "|---|---|---|"]
+        header += [
+            "",
+            "## Loss",
+            "",
+            "| step/epoch | 구분 | loss | elapsed_min |",
+            "|---|---|---|---|",
+        ]
         self.output_path.write_text("\n".join(header) + "\n", encoding="utf-8")
 
     def append_row(self, label: str, kind: str, loss: float) -> None:
+        elapsed_min = (time.monotonic() - self.start_time) / 60
         with open(self.output_path, "a", encoding="utf-8") as f:
-            f.write(f"| {label} | {kind} | {loss:.4f} |\n")
+            f.write(f"| {label} | {kind} | {loss:.4f} | {elapsed_min:.1f} |\n")
 
 
 def build_log_callback(log_writer: TrainingLogWriter):
@@ -219,13 +230,14 @@ def run(args: argparse.Namespace) -> None:
         dtype=None,  # 자동 감지 (T4 -> float16)
         load_in_4bit=True,
     )
+    target_modules = [m.strip() for m in args.target_modules.split(",") if m.strip()]
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=target_modules,
         use_gradient_checkpointing="unsloth",
         random_state=args.seed,
     )
@@ -250,7 +262,7 @@ def run(args: argparse.Namespace) -> None:
         "base_model": args.base_model,
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
-        "target_modules": "q_proj,k_proj,v_proj,o_proj",
+        "target_modules": args.target_modules,
         "learning_rate": args.learning_rate,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
@@ -361,6 +373,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--training-log", type=Path, default=Path("docs/02-training_log.md"))
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument(
+        "--target-modules",
+        type=str,
+        default="q_proj,k_proj,v_proj,o_proj",
+        help="LoRA를 적용할 모듈(콤마 구분). MLP까지 넓히려면 예: "
+        "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+    )
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument(
         "--epochs",
