@@ -98,10 +98,19 @@ def load_eval_records(path: Path) -> list[dict]:
     return records
 
 
-def call_ollama(model: str, prompt: str, timeout: int = 60) -> str:
+def call_ollama(model: str, prompt: str, timeout: int = 120) -> str:
+    # num_predict을 명시적으로 강제한다 - Modelfile의 PARAMETER num_predict 기본값이
+    # /api/generate 호출에 항상 반영되는 게 아니어서(관찰상 무시되는 경우 있음), 모델이
+    # EOS를 못 만나고 수천 토큰씩 무한 생성하는 사고를 방지하기 위한 안전장치.
+    # 이 프로젝트 스키마(JSON 객체 1~3개)는 200 토큰이면 충분하다.
     resp = requests.post(
         OLLAMA_URL,
-        json={"model": model, "prompt": prompt, "stream": False},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": 200},
+        },
         timeout=timeout,
     )
     resp.raise_for_status()
