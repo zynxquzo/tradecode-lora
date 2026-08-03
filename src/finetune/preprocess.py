@@ -52,8 +52,20 @@ def normalize_hs_code(raw_code: str, code_length: int) -> str | None:
 
 
 def to_schema_record(
-    description: str, hs_code: str, confidence_basis: str, code_length: int
+    description: str, hs_code: str, confidence_basis: str, code_length: int, simple_target: bool = False
 ) -> dict:
+    """simple_target=True면 confidence_basis 없이 hs_code만 예측하도록 타깃을 단순화한다.
+    실험 3에서 완전한 설정(균형 데이터 + LoRA 용량 확대)으로도 completion이 구두점
+    반복으로 붕괴하는 게 "confidence_basis라는 복잡한 문자열까지 같이 배우려다
+    학습 신호가 희석된 것"인지 확인하기 위한 진단용 옵션 (docs/04-comparison.md에서부터
+    있었던 "스키마 형태는 배우지만 내용은 못 배운다" 가설과 직결)."""
+    if simple_target:
+        instruction = f"다음 상품설명에 해당하는 HS코드를 {code_length}자리까지 추천하세요."
+        return {
+            "instruction": instruction,
+            "input": description.strip(),
+            "output": {"hs_code": hs_code},
+        }
     instruction = f"다음 상품설명에 해당하는 HS코드를 {code_length}자리까지 추천하고 근거를 설명하세요."
     return {
         "instruction": instruction,
@@ -65,7 +77,9 @@ def to_schema_record(
     }
 
 
-def convert_records(raw_records: list[dict], code_length: int) -> tuple[list[dict], int]:
+def convert_records(
+    raw_records: list[dict], code_length: int, simple_target: bool = False
+) -> tuple[list[dict], int]:
     """augmented 레코드를 스키마 포맷으로 변환. is_augmented 플래그는 별도로 유지해
     split 단계에서 eval 우선순위 결정에 사용한다. (변환 결과, 스킵 개수) 반환."""
     converted = []
@@ -77,7 +91,7 @@ def convert_records(raw_records: list[dict], code_length: int) -> tuple[list[dic
             skipped += 1
             continue
         schema_rec = to_schema_record(
-            description, hs_code, rec.get("confidence_basis", ""), code_length
+            description, hs_code, rec.get("confidence_basis", ""), code_length, simple_target
         )
         schema_rec["_is_augmented"] = bool(rec.get("is_augmented", False))
         converted.append(schema_rec)
@@ -164,12 +178,13 @@ def run(
     eval_ratio: float = 0.2,
     seed: int = 42,
     code_length: int = DEFAULT_CODE_LENGTH,
+    simple_target: bool = False,
 ) -> None:
     logger.info("증강 데이터 로드: %s", input_path)
     raw_records = load_augmented_records(input_path)
     logger.info("원본 레코드 수: %d", len(raw_records))
 
-    converted, skipped = convert_records(raw_records, code_length)
+    converted, skipped = convert_records(raw_records, code_length, simple_target)
     logger.info("변환 완료: %d건 성공, %d건 스킵(description/hs_code 누락)", len(converted), skipped)
 
     if not converted:
@@ -211,9 +226,14 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CODE_LENGTH,
         help="split/instruction 문구 기준이 되는 HS코드 자릿수 (기본 6, 예: 4=호 단위)",
     )
+    parser.add_argument(
+        "--simple-target",
+        action="store_true",
+        help="confidence_basis 없이 hs_code만 예측하도록 completion을 단순화 (진단용)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run(args.input, args.output_dir, args.eval_ratio, args.seed, args.code_length)
+    run(args.input, args.output_dir, args.eval_ratio, args.seed, args.code_length, args.simple_target)
