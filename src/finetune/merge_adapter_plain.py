@@ -95,9 +95,13 @@ def run(args: argparse.Namespace) -> None:
     )
 
     config = AutoConfig.from_pretrained(base_model_name)
-    # 베이스 config에는 quantization_config가 남아있어 그대로 두면 다시 4bit로 로드를
-    # 시도하니, 순수 fp16 모델임을 명시하기 위해 제거한다.
-    config.quantization_config = None
+    # 베이스 config에는 quantization_config가 남아있어 그대로 두면(None으로만 덮어써도
+    # 속성 자체는 남아 config.json에 "quantization_config": null로 직렬화된다) 나중에
+    # 이 모델을 다시 불러올 때 transformers가 "사전 양자화된 모델"로 오인해
+    # AutoHfQuantizer.supports_quant_method(None)에서 AttributeError로 죽는다.
+    # 속성 자체를 지워서 config.json에 아예 안 남도록 한다.
+    if hasattr(config, "quantization_config"):
+        del config.quantization_config
     del quantized_model
     torch.cuda.empty_cache()
 
