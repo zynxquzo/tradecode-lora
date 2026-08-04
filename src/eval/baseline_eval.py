@@ -98,17 +98,25 @@ def load_eval_records(path: Path) -> list[dict]:
     return records
 
 
-def call_ollama(model: str, prompt: str, timeout: int = 120) -> str:
+def call_ollama(model: str, prompt: str, raw: bool = False, timeout: int = 120) -> str:
     # num_predict을 명시적으로 강제한다 - Modelfile의 PARAMETER num_predict 기본값이
     # /api/generate 호출에 항상 반영되는 게 아니어서(관찰상 무시되는 경우 있음), 모델이
     # EOS를 못 만나고 수천 토큰씩 무한 생성하는 사고를 방지하기 위한 안전장치.
     # 이 프로젝트 스키마(JSON 객체 1~3개)는 200 토큰이면 충분하다.
+    #
+    # raw=True는 Ollama가 프롬프트에 모델의 채팅 템플릿(Gemma의 <start_of_turn> 등)을
+    # 자동으로 씌우지 않고 그대로 전달하게 한다. finetuned 프롬프트는 이미 train.py가
+    # 학습에 쓴 완성된 형태("### Instruction:\n...\n### Response:\n")라, 채팅 템플릿을
+    # 또 씌우면 학습 때와 다른 입력이 되어 반복 루프/무의미한 출력이 난다(실험 3에서
+    # 확인, docs/10-experiment3_investigation.md 참고). zero_shot(베이스 모델 평가용)은
+    # 채팅 템플릿이 적용되는 게 정상 사용법이라 그대로 둔다.
     resp = requests.post(
         OLLAMA_URL,
         json={
             "model": model,
             "prompt": prompt,
             "stream": False,
+            "raw": raw,
             "options": {"num_predict": 200},
         },
         timeout=timeout,
@@ -154,7 +162,7 @@ def extract_hs_codes(raw_response: str, code_length: int) -> list[str]:
 def predict(model: str, description: str, prompt_style: str, templates: dict, code_length: int) -> list[str]:
     template = templates[prompt_style]
     prompt = template.format(description=description)
-    raw_response = call_ollama(model, prompt)
+    raw_response = call_ollama(model, prompt, raw=(prompt_style == "finetuned"))
     return extract_hs_codes(raw_response, code_length)
 
 
