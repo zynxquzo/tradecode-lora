@@ -61,9 +61,16 @@ early stopping에 사용한다.
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
+
+# Kaggle 등에서 GPU가 2개 이상 보이면 device_map={"": 0}으로 모델을 한 GPU에 고정해도
+# transformers Trainer가 torch.cuda.device_count()만 보고 자동으로 nn.DataParallel을
+# 씌워 replica를 다른 GPU로 복제하려다 CUBLAS_STATUS_EXECUTION_FAILED로 죽는다. CUDA
+# 초기화 전에 GPU 0 하나만 보이도록 막아 이 자동 래핑 자체가 안 일어나게 한다.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
