@@ -177,11 +177,15 @@ def run(args: argparse.Namespace) -> None:
         bnb_4bit_compute_dtype=torch.float16,
         bnb_4bit_use_double_quant=True,
     )
+    # device_map="auto"는 여러 GPU가 보이면(Kaggle T4 x2 등) 모델을 GPU 사이에
+    # 분산시키는데, 이 모델 크기(2.6B)에는 불필요하고 Trainer가 그 위에
+    # DataParallel까지 씌우려다 "parameters on device cuda:1" 에러로 충돌한다.
+    # 단일 GPU로 고정한다.
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
         quantization_config=bnb_config,
         dtype=torch.float16,
-        device_map="auto",
+        device_map={"": 0},
     )
     model.config.use_cache = False
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
