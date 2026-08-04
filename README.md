@@ -3,11 +3,12 @@
 상품설명 텍스트를 입력받아 HS코드(품목분류코드)를 추천하는 경량 파인튜닝 모델
 (Gemma2-2B + LoRA) 및 로컬 서빙 프로젝트.
 
-## Status: 🚧 실험 3 진행 중
+## Status: ✅ 실험 3 완료 — Exact Match 97.53% 달성
 
 Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 → 재평가로
-이어지는 전체 파이프라인을 구축했고, 두 차례 실험을 거치며 실패를 원인까지
-추적해 다음 실험을 설계하는 과정을 반복하고 있다.
+이어지는 전체 파이프라인을 구축했고, 세 차례 실험을 거치며 실패를 원인까지
+추적해 다음 실험을 설계하는 과정을 반복한 끝에 실용적인 수준의 정확도에
+도달했다.
 
 - **실험 1** (6자리 소호 타깃, 61/62류 한정): loss는 크게 개선됐지만
   (perplexity 약 6500 → 약 60) 실제 정확도는 baseline·fine-tuned 모두
@@ -19,13 +20,20 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
   원인은 학습 데이터(`products_real.csv`)가 61/62류(의류)로만 구성돼 정답의
   첫 자리가 100% "6"이었던 것 — 여기에 LoRA 용량 확대가 겹치며 "6만 찍으면
   loss가 잘 떨어진다"는 지름길로 완전히 최적화됐다.
-- **실험 3** (진행 중): 관세청 공식 HS코드 품목분류표를 참고해 63/64/84/85류
-  데이터를 추가하고(첫 자리 '6' 아닌 비중 22%까지 확보), LoRA 용량은 실험 1
-  수준으로 되돌렸다. 데이터 준비는 끝났고 Colab 재학습 결과를 기다리는 중.
+- **실험 3** (완료): 관세청 공식 HS코드 품목분류표를 참고해 63/64/84/85류
+  데이터를 추가하고(첫 자리 '6' 아닌 비중 22%까지 확보), completion을
+  `{"hs_code": "NNNN"}` 형태로 단순화했다. 여기까지는 eval loss가 0.18까지
+  정상적으로 떨어졌지만, 병합된 모델이 여전히 무의미한 텍스트만 생성하는
+  새로운 문제에 부딪혔다 — 긴 조사 끝에 **unsloth가 학습에 쓰는 Gemma-2 계산
+  방식이 순정 transformers/llama.cpp 구현과 근본적으로 달라서, unsloth 밖에서는
+  병합 방법을 몇 가지로 바꿔봐도 항상 실패한다**는 걸 확인했다. 학습을 순정
+  transformers + peft(QLoRA)로 바꿔 이 불일치 자체를 없앤 뒤 재학습 →
+  **eval.jsonl 405건 기준 Exact Match 97.53%** 달성.
 
 자세한 경과는 [`docs/04-comparison.md`](docs/04-comparison.md)(실험 1),
 [`docs/08-experiment2_training_log.md`](docs/08-experiment2_training_log.md)(실험 2 원인 분석),
-[`docs/09-experiment3-plan.md`](docs/09-experiment3-plan.md)(실험 3 계획)에 정리했다.
+[`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md)(실험 3 전체 조사 기록)에
+정리했다.
 
 ## 결과 요약
 
@@ -49,7 +57,18 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 | Parse Failure Rate | 0.20% | 10.84% |
 
 파인튜닝 모델이 baseline보다 전 지표에서 나쁘다 — 위에서 설명한 mode collapse
-때문이다. 실험 3 결과가 나오면 이 표에 이어서 추가할 예정이다.
+때문이다.
+
+**실험 3** (4자리 타깃, 데이터 다양화 + completion 단순화 + unsloth 제거, 405건)
+
+| 지표 | Fine-tuned (LoRA) |
+|---|---|
+| Exact Match (4자리) | **97.53%** |
+| Partial Match (2자리) | 100.00% |
+| Top-3 Recall | 97.53% |
+| Parse Failure Rate | 0.00% |
+
+원본 리포트: [`docs/11-experiment3_finetuned_result.md`](docs/11-experiment3_finetuned_result.md).
 
 ## 문서
 
@@ -65,6 +84,8 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 | [`docs/07-experiment2_finetuned_result.md`](docs/07-experiment2_finetuned_result.md) | 실험 2 파인튜닝 후 재평가 결과 |
 | [`docs/08-experiment2_training_log.md`](docs/08-experiment2_training_log.md) | 실험 2 학습 로그 + mode collapse 원인 분석 |
 | [`docs/09-experiment3-plan.md`](docs/09-experiment3-plan.md) | 실험 3 계획 (데이터 다양화 + LoRA 설정 원복) |
+| [`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md) | 실험 3 전체 조사 기록 (unsloth 근본 원인 규명 포함) |
+| [`docs/11-experiment3_finetuned_result.md`](docs/11-experiment3_finetuned_result.md) | 실험 3 최종 파인튜닝 재평가 결과 (405건, Exact 97.53%) |
 
 ## 폴더 구조
 
@@ -79,8 +100,9 @@ tradecode-lora/
 │   │   │                            데이터 추출 (클래스 다양화용, 실험 3~)
 │   │   ├── augment.py        원본 설명문 패러프레이징 증강 (OpenAI API)
 │   │   ├── preprocess.py     증강 데이터 -> instruction 포맷 변환 + train/eval split
-│   │   ├── train.py          Unsloth LoRA 학습 (Colab/Kaggle GPU 전제)
-│   │   └── merge_adapter.py  LoRA adapter -> 16bit 병합 (Unsloth 공식 API)
+│   │   ├── train.py          순정 transformers + peft(QLoRA) LoRA 학습 (Colab/Kaggle GPU 전제)
+│   │   ├── merge_adapter_plain.py  LoRA adapter -> fp16 병합 (순정 peft, 현재 사용)
+│   │   └── merge_adapter.py  LoRA adapter -> 16bit 병합 (Unsloth 공식 API, 더 이상 안 씀 - docs/10 참고)
 │   ├── eval/
 │   │   └── baseline_eval.py  Ollama 서빙 모델 평가 (zero-shot/fine-tuned 겸용)
 │   └── serving/
@@ -125,8 +147,10 @@ bash src/serving/build_ollama_model.sh outputs/merged
 
 ### 5. 재평가 (로컬)
 ```
-python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetuned --output docs/03-finetuned_result.md
+python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetuned --code-length 4 --output docs/11-experiment3_finetuned_result.md
 ```
+(`--code-length`는 `preprocess.py`로 데이터를 만들 때 쓴 자릿수와 반드시 맞춰야
+한다 — 실험 3은 4자리.)
 
 ## 배운 점
 
@@ -149,3 +173,23 @@ python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetun
   낮춰 클래스 희소성을 줄여도, 데이터 자체가 특정 카테고리(류)에 편중돼 있으면
   분류기가 아니라 편중 암기기를 학습하게 된다. 데이터셋을 구성할 때 클래스별
   샘플 수뿐 아니라 "정답 값의 자릿수별 분포"도 함께 점검해야 한다.
+- **학습 프레임워크와 서빙 프레임워크는 같은 계산 경로를 써야 한다**: 실험 3에서
+  eval loss가 0.18까지 정상적으로 떨어진 unsloth 학습 결과물이, 병합 방법을
+  6가지 넘게 바꿔가며 시도해도 unsloth 밖(순정 transformers, GGUF/llama.cpp)에서는
+  전부 실패했다. 원인은 저장/병합 버그가 아니라 unsloth가 Gemma-2를 계산하는
+  방식 자체가 순정 구현과 근본적으로 달랐던 것 — 학습에 쓴 프레임워크의 최적화가
+  실제 서빙 환경과 다른 계산을 한다면, 아무리 가중치를 정확히 옮겨도 재현되지
+  않는다. 학습·서빙이 같은 계산 경로를 쓰도록 처음부터 설계하는 게 훨씬 안전하다
+  (`docs/10-experiment3_investigation.md` 참고).
+- **loss가 낮아도 실제 생성 테스트 전에는 아무것도 확정 짓지 말 것**: 이번
+  프로젝트에서 "loss는 정상인데 생성은 무의미함" 패턴이 실험 1, 실험 3(1·2·3차
+  재학습 전부)에서 반복됐다. 원인은 매번 달랐지만(스키마만 학습, 병합 버그로
+  오진단했던 프레임워크 불일치, 마지막엔 Ollama의 채팅 템플릿 자동 적용까지)
+  공통점은 하나 — teacher-forcing 기반 loss만으로는 절대 알 수 없고, 실제
+  자유 생성(`generate()`)을 몇 건이라도 직접 봐야 잡히는 문제였다는 것.
+- **추론 서버(Ollama 등)가 프롬프트에 무언가를 몰래 덧붙일 수 있다**: Ollama의
+  `/api/generate`는 `raw: true`를 안 주면 모델의 채팅 템플릿을 자동으로 씌운다.
+  파인튜닝 모델을 순수 Alpaca 스타일 프롬프트(채팅 템플릿 아님)로 학습했다면,
+  이 자동 래핑 때문에 학습 때와 다른 입력이 들어가 겉보기엔 "병합이 잘못됐나?"
+  싶은 증상이 재현된다. 재평가 스크립트(`baseline_eval.py`)가 이 버그를 그대로
+  갖고 있었다면 정량 평가 결과 전체가 조용히 오염됐을 것이다.
