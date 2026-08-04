@@ -113,8 +113,10 @@ python src/eval/baseline_eval.py --model gemma2:2b --prompt-style zero_shot --ou
 pip install -r requirements-colab.txt
 python src/finetune/train.py --smoke-test --max-steps 60   # 사전 확인
 python src/finetune/train.py                                # 전체 학습 (기본값 = lora_r 16 / attention-only)
-python src/finetune/merge_adapter.py --adapter-dir outputs/adapter --output-dir outputs/merged
+python src/finetune/merge_adapter_plain.py --adapter-dir outputs/adapter --output-dir outputs/merged
 ```
+(순정 transformers + peft(QLoRA) 기반. unsloth를 쓰던 `merge_adapter.py`는
+더 이상 쓰지 않는다 — 이유는 `docs/10-experiment3_investigation.md` 참고.)
 
 ### 4. GGUF 변환 + Ollama 등록 (로컬)
 ```

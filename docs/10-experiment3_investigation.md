@@ -161,29 +161,82 @@ true` 필드 존재)과 `docs/02-training_log.md`(step 630→900 구간에서 ev
 실제로는 둘 다 가중치 자체는 올바르게 저장했을 가능성이 높고, 그걸 검증하는 데
 썼던 **순정 transformers 생성 테스트 방법 자체가 신뢰할 수 없었다**.
 
-## 8. 이게 실제 배포 경로에 문제가 되는가?
+## 8. (틀린 가설이었음) "llama.cpp는 이 불일치에서 자유로울 것"
 
-이 프로젝트의 실제 서빙 경로는 순정 transformers가 아니라 **GGUF 변환
-(`convert_hf_to_gguf.py`) → llama.cpp → Ollama**다. llama.cpp는 Gemma-2를
-완전히 독립적으로 자체 구현하므로, 이번에 발견한 "unsloth vs 순정 transformers"
-불일치의 영향을 받지 않을 가능성이 높다. 따라서 순정 transformers로 병합 모델을
-검증하려는 추가 시도는 무의미할 수 있고, **GGUF 변환 후 실제 목표 플랫폼에서
-검증하는 것이 다음 단계**다. 이 가설은 아직 검증 전이며, 다음 세션에서 확인해야
-한다.
+이 프로젝트의 실제 서빙 경로는 순정 transformers가 아니라 GGUF 변환 →
+llama.cpp → Ollama이므로, llama.cpp가 Gemma-2를 독립적으로 구현해 이 불일치의
+영향을 안 받을 것이라는 가설을 세웠었다. **9절에서 검증한 결과 이 가설은
+틀렸다.**
+
+## 9. 6가지 조합 전수 테스트 — unsloth 밖에서는 무엇을 해도 실패한다
+
+재학습된 adapter를 놓고, 저장/병합/서빙 방식을 바꿔가며 가능한 조합을 전부
+테스트했다:
+
+| # | 병합 방법 | 검증 방법 | 결과 |
+|---|---|---|---|
+| 1 | 없음 (adapter만 부착) | 순정 transformers | 실패 |
+| 2 | 순정 peft 병합 (별도 fp16 베이스) | 순정 transformers | 실패 |
+| 3 | 순정 peft 병합 (학습 때 그 4bit 베이스를 직접 역양자화 후 병합) | 순정 transformers | 실패 |
+| 4 | 순정 peft 병합 (#3과 동일) | GGUF 변환 → Ollama | 실패 |
+| 5 | unsloth 공식 병합(`save_pretrained_merged`) | GGUF 변환 → Ollama | 실패 |
+| 6 | 병합 없음, LoRA를 `convert_lora_to_gguf.py`로 GGUF 어댑터화 후 llama.cpp가 추론 시점에 직접 적용 | Ollama (`ADAPTER` 지시자) | 실패 |
+| 7 | 없음 (adapter만 부착) | **unsloth 네이티브**(`FastLanguageModel.for_inference`) | **성공** |
+
+#3(순정 peft 역양자화 병합) 과정에서 부수적으로 발견/수정한 버그들(모두
+`merge_adapter_plain.py`에 반영, 커밋 `900e439`~`95ce2cc`):
+- `state_dict()`를 거치면 `bnb.nn.Params4bit`의 `quant_state`가 유실되고 4bit로
+  패킹된 원본이 그대로 나온다(shape가 찌그러짐) → 살아있는 모듈 객체
+  (`module.weight`)에서 직접 읽어야 함.
+- Gemma-2는 `lm_head`가 `embed_tokens`와 가중치를 공유하는데, `named_parameters()`
+  가 중복 텐서 중 하나를 건너뛰어 키가 하나 빠짐 → 수동으로 채워 넣음.
+- `config.quantization_config = None`으로만 지워도 속성 자체는 남아
+  `config.json`에 `"quantization_config": null`로 직렬화되고, 나중에 그 모델을
+  다시 불러올 때 transformers가 "사전 양자화된 모델"로 오인해 `AttributeError`로
+  죽음 → `del config.quantization_config`로 속성 자체를 제거해야 함.
+
+이 버그들을 다 고쳐서 **가중치 자체는 정확하게 역양자화·병합·저장됐다고 볼 수
+있는 상태**로 만들었는데도(#3), 여전히 실패했고, unsloth 공식 병합(#5)도
+GGUF까지 가면 실패했고, 심지어 **병합을 아예 거치지 않고 LoRA 델타를
+llama.cpp가 직접 계산**하게 한 #6도 실패했다. 마지막 #6은 결정적이다 — 이 경우
+llama.cpp가 베이스 forward와 LoRA 델타 적용을 전부 자기 방식대로 계산하므로,
+저장/병합/역양자화 로직의 버그가 전혀 개입할 여지가 없다. 그런데도 실패했다는
+것은, **문제가 가중치나 저장 방식이 아니라 "이 LoRA 가중치는 unsloth가 학습 중
+사용한 Gemma-2 forward 계산(예: 속도를 위해 근사되거나 생략된 logit
+softcapping/임베딩 스케일링 등)에 맞춰 최적화됐고, 순정 구현(transformers든
+llama.cpp든)의 계산 결과와는 안 맞는다"**는 뜻이다. 7절의 결론이 최종 확정됐다.
+
+## 10. 결정: unsloth 없이 순정 transformers/peft로 재학습
+
+병합·서빙 쪽에서 고칠 수 있는 문제가 아니므로, **학습 자체를 unsloth 없이 순정
+transformers + peft(QLoRA) + trl로 바꿔서 학습과 추론이 처음부터 같은 계산
+경로를 쓰게 만들기로 결정**했다(커밋으로 반영 예정: `src/finetune/train.py`
+전면 재작성, `requirements-colab.txt`에서 unsloth 제거, 기본 베이스 모델을
+unsloth의 사전 양자화 체크포인트(`unsloth/gemma-2-2b-bnb-4bit`)에서 순정
+`google/gemma-2-2b`로 변경 — `BitsAndBytesConfig`로 학습 시점에 4bit 동적
+양자화).
+
+트레이드오프: unsloth의 Triton 커널 최적화가 없어 학습 속도가 느려진다(정확한
+배수는 미측정, GPU 기준으로도 체감 가능한 수준일 것으로 예상). 대신 병합 후
+정상 동작이 보장된다는 이득이 훨씬 크다 — 지금까지 7번의 조합 테스트로 이미
+그만큼의 시간을 썼다.
+
+`merge_adapter.py`(unsloth 경로)는 더 이상 학습 파이프라인에서 쓰지 않지만
+과거 조사 기록으로서 파일은 남겨둔다. 새 파이프라인은 `merge_adapter_plain.py`
+하나로 통일된다 — QLoRA로 동적 양자화한 표준 베이스에 병합하는 것은 peft의
+공식 지원 워크플로우라, 지금까지 겪은 문제들(예: 사전 양자화 체크포인트 특유의
+`Params4bit` 처리) 없이 정상 동작할 것으로 기대된다.
 
 ## 다음 단계
 
-1. Kaggle에서 `outputs/merged_plain`(fp16 베이스에 순정 peft로 병합된 모델,
-   병합 자체는 성공 확인됨)을 zip으로 다운로드 → 로컬 `outputs/merged_plain`에
-   압축 해제.
-2. 로컬에서 `bash src/serving/build_ollama_model.sh outputs/merged_plain`로 GGUF
-   변환 + Ollama 등록.
-3. `python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetuned`로
-   `eval.jsonl` 전체(405건) 정량 재평가.
-4. **판정 기준**: GGUF/Ollama 결과가 unsloth 네이티브 추론 때처럼 정상적인 HS코드를
-   생성하면 8절의 가설(llama.cpp는 이 불일치에서 자유로움)이 맞은 것 — 결과를
-   `docs/11-experiment3_*_result.md`로 기록. 만약 GGUF에서도 같은 희귀 단어
-   증상이 재현되면, `convert_hf_to_gguf.py`가 변환 시점에 참조하는 것도 순정
-   transformers의 Gemma-2 구현이라 같은 불일치를 상속받는다는 뜻이므로, GGUF
-   변환을 unsloth가 직접 지원하는 경로(`model.save_pretrained_gguf()` 등)로
-   바꾸는 것을 검토해야 한다.
+1. 새 `train.py`로 Kaggle에서 재학습 (`--lora-r 32 --lora-alpha 64
+   --target-modules q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj`,
+   데이터는 기존 `data/processed_simple` 그대로).
+2. `merge_adapter_plain.py`로 병합.
+3. 순정 transformers 생성 스모크 테스트로 정상 출력(`{"hs_code": "NNNN"}` 형태)
+   나오는지 확인 — 이번엔 unsloth와 무관한 경로로 학습했으니 정상이어야 한다.
+4. 정상이면 GGUF 변환 → Ollama 등록 → `eval.jsonl` 전체(405건) 정량 재평가 →
+   `docs/11-experiment3_*_result.md`로 기록.
+5. 혹시 이번에도 실패하면(가능성은 낮지만), 그때는 정말로 데이터/학습
+   하이퍼파라미터 쪽 문제일 가능성이 높다 — 프레임워크 조합은 이걸로 완전히
+   소거됐기 때문이다.
