@@ -1,8 +1,10 @@
-# 실험 3 진행 기록: 데이터 다양화, 타깃 단순화, unsloth 병합 버그 발견
+# 실험 3 진행 기록: 데이터 다양화, 타깃 단순화, 그리고 진짜 근본 원인 확인
 
 `docs/09-experiment3-plan.md`에서 세운 계획(데이터 다양화 + LoRA 용량 원복)을
-실행하고, 그 과정에서 예상 못한 문제를 추적한 기록. 아직 최종 결론(실제 정량
-평가)에는 도달하지 못했고, 다음 세션에서 이어서 진행해야 한다.
+실행하고, 그 과정에서 예상 못한 문제를 추적한 기록. **5·6절의 "unsloth 병합
+자체의 버그"라는 결론은 재학습 후 재검증 과정에서 틀린 것으로 확인됐다 — 실제
+원인은 7절 참고.** 아직 최종 결론(GGUF/Ollama 정량 평가)에는 도달하지 못했고,
+다음 세션에서 이어서 진행해야 한다.
 
 ## 1. 데이터 다양화 (완료)
 
@@ -63,7 +65,7 @@ LoRA를 다시 실험 2 수준(r=32, alpha=64, MLP 포함)으로 키워 재학�
 계열이, 기계/전기류(84/85류) 입력엔 `vectorielle` 계열이 나오는 등 카테고리
 수준의 구분은 남아있었다.
 
-## 5. 근본 원인 확정: unsloth 병합(`save_pretrained_merged`) 자체의 버그
+## 5. (틀린 결론이었음, 7절에서 정정) 당시 추정: unsloth 병합(`save_pretrained_merged`) 자체의 버그
 
 다음 단계로 여러 가설을 하나씩 제거했다:
 
@@ -85,7 +87,7 @@ LoRA를 다시 실험 2 수준(r=32, alpha=64, MLP 포함)으로 키워 재학�
 이번에 설치된 버전이 "Unsloth 2026.8.1"이었다 — 이 최신 버전에 Gemma-2 병합
 관련 회귀가 있을 가능성이 유력하다.
 
-## 6. 우회책: 순정 peft 병합 스크립트 추가 (검증 대기 중)
+## 6. (당시 계획) 우회책: 순정 peft 병합 스크립트 추가 (검증 대기 중)
 
 `merge_adapter.py`의 기존 docstring에는 "순정 peft.PeftModel.merge_and_unload()는
 이미 시도했다가 실패했다"는 기록이 있었지만, 그건 학습에 실제로 쓰인 4bit 베이스
@@ -97,16 +99,91 @@ LoRA를 다시 실험 2 수준(r=32, alpha=64, MLP 포함)으로 키워 재학�
 세션에서 이 스크립트로 병합한 모델이 정상 생성을 하는지 확인하는 것부터
 시작해야 한다.
 
+## 7. 재학습 및 재검증: "병합 버그"가 아니라 순정 transformers의 Gemma-2 회귀였다
+
+Kaggle 세션이 끊겨 `outputs/adapter`가 유실돼 재학습부터 다시 시작했다(데이터는
+`data/processed_simple/{train,eval}.jsonl` 그대로, LoRA는 r=32/alpha=64/MLP 포함
+동일 설정). 새 클론에는 `pip install -r requirements-colab.txt`가 unsloth
+**2026.8.2**를 설치했다(직전 세션의 2026.8.1보다도 최신).
+
+### 7.1 병합은 성공, 그런데 순정 transformers로 다시 실패
+
+`merge_adapter_plain.py`(6절에서 작성한 순정 peft 병합 스크립트)를 그대로 쓰려니
+새로운 문제가 나왔다 — 학습 베이스(`unsloth/gemma-2-2b-bnb-4bit`, 4bit)에 그대로
+병합하면 peft가 결과를 다시 4bit로 재양자화하는데(`Linear4bit.merge()`), 이
+상태를 최신 transformers(5.5.0)의 `save_pretrained()` 내부 `revert_weight_conversion()`
+로직이 처리하지 못해 `NotImplementedError`로 죽었다. 해결책: 학습 베이스가 아니라
+같은 모델의 **fp16(비양자화) 버전**(`unsloth/gemma-2-2b`)에 병합하도록
+`merge_adapter_plain.py`를 수정(`--full-precision-base` 옵션 추가, 커밋 `8a09ea8`).
+LoRA 가중치는 dtype에 무관하게 모듈 이름/shape만 맞으면 병합되므로 문제없이 동작.
+
+병합 자체는 성공했지만, 병합된 모델을 순정 transformers로 생성 테스트하니 **5절과
+완전히 동일한 증상**(`purpoſe`/`vectorielle` 등 특정 희귀 단어 반복, 카테고리별로
+다른 단어군)이 재현됐다.
+
+### 7.2 결정적 반증: 병합을 아예 안 해도 똑같이 실패한다
+
+병합 방식이 원인이라는 가설을 검증하기 위해, **병합을 하지 않고** fp16 베이스에
+`PeftModel.from_pretrained()`로 adapter만 얹어서(merge_and_unload 호출 없이)
+생성 테스트를 했다 — 결과는 병합했을 때와 **바이트 단위로 동일**했다. 이것으로
+"병합 로직이 가중치를 손상시킨다"는 5절의 가설은 완전히 기각된다. 병합을 거치지
+않은 순수 adapter+base 조합조차 같은 증상을 보이므로, 문제는 병합이 아니라 다른
+곳에 있다.
+
+추가로 두 가설을 더 검증했다:
+- **teacher-forcing 검증**: 실제 정답 completion을 입력에 그대로 넣고 한 번의
+  forward pass로 각 위치의 다음 토큰 예측을 확인 → 토큰 단위 일치율 **0%**,
+  여전히 같은 희귀 단어 생성. eval_loss 0.18이 실제로 이 위치들에서 나온
+  값이라면 나올 수 없는 결과.
+- **attention 구현 차이 의심**(Gemma-2의 `attn_logit_softcapping`이 `sdpa` 등에서
+  조용히 무시될 수 있음) → `attn_implementation="eager"`로 명시해 재시도해도
+  동일하게 실패. 기각.
+
+### 7.3 근본 원인 확정: unsloth 학습 결과물은 unsloth로만 정확히 재현된다
+
+`adapter_config.json`(r=32, alpha=64, MLP 포함 target_modules 확인, `"unsloth_fixed":
+true` 필드 존재)과 `docs/02-training_log.md`(step 630→900 구간에서 eval_loss
+0.23→0.20→0.19→0.18로 매끄럽게 수렴, 우연이 아닌 진짜 수렴 곡선)를 재확인해
+학습 설정 자체는 의도한 그대로였음을 확인했다.
+
+마지막으로, **unsloth 자체의 로드/추론 경로**(`FastLanguageModel.from_pretrained("outputs/adapter")`
++ `FastLanguageModel.for_inference(model)`)로 같은 adapter를 불러와 같은 프롬프트로
+생성해보니 — **정상 동작**했다. `6402→6404`, `6105→6103`처럼 카테고리가 맞는
+근사값이 나왔고 `6110→6110`은 정확히 일치했다. 형식도 전부 올바른 JSON.
+
+**결론**: 학습은 처음부터 제대로 됐다(eval_loss 0.18은 진짜였다). 실패의 원인은
+"unsloth 병합 버그"가 아니라, **unsloth가 학습에 쓰는 Gemma-2 내부 구현(임베딩
+스케일링/logit softcapping 등 처리 방식)이 순정 transformers(이번 세션 기준
+5.5.0)의 Gemma-2 구현과 수치적으로 다르다**는 것이다. unsloth로 저장한 가중치를
+순정 transformers/peft로 그대로 불러와 `model.generate()`를 돌리면, 병합 여부나
+병합 방법과 무관하게 항상 이 불일치가 재현된다. `merge_adapter.py`(unsloth 병합)와
+`merge_adapter_plain.py`(순정 peft 병합) 둘 다 5절 시점엔 "실패"로 보였지만,
+실제로는 둘 다 가중치 자체는 올바르게 저장했을 가능성이 높고, 그걸 검증하는 데
+썼던 **순정 transformers 생성 테스트 방법 자체가 신뢰할 수 없었다**.
+
+## 8. 이게 실제 배포 경로에 문제가 되는가?
+
+이 프로젝트의 실제 서빙 경로는 순정 transformers가 아니라 **GGUF 변환
+(`convert_hf_to_gguf.py`) → llama.cpp → Ollama**다. llama.cpp는 Gemma-2를
+완전히 독립적으로 자체 구현하므로, 이번에 발견한 "unsloth vs 순정 transformers"
+불일치의 영향을 받지 않을 가능성이 높다. 따라서 순정 transformers로 병합 모델을
+검증하려는 추가 시도는 무의미할 수 있고, **GGUF 변환 후 실제 목표 플랫폼에서
+검증하는 것이 다음 단계**다. 이 가설은 아직 검증 전이며, 다음 세션에서 확인해야
+한다.
+
 ## 다음 단계
 
-1. Kaggle 세션이 끊겨 `outputs/adapter`가 유실됨 — 재학습부터 다시 시작해야 함
-   (데이터: `data/processed_simple/{train,eval}.jsonl`, 이미 로컬에 있고 Kaggle에도
-   `simple-data`로 업로드돼 있음. LoRA 설정: r=32, alpha=64, MLP 포함, 그대로).
-2. 병합은 `merge_adapter.py`(unsloth) 말고 **`merge_adapter_plain.py`(순정 peft)**로
-   바로 진행.
-3. train/eval 샘플 생성 테스트로 정상 출력 나오는지 확인.
-4. 정상이면 GGUF 변환(`src/serving/build_ollama_model.sh`) → Ollama 등록 →
-   `eval.jsonl` 전체(405건) 정량 재평가 → `docs/11-experiment3_*_result.md`로 기록.
-5. 만약 `merge_adapter_plain.py`도 같은 증상이면, unsloth 버전을 낮춰서
-   (`requirements-colab.txt`에 특정 버전 고정) `merge_adapter.py`(unsloth 경로)를
-   다시 시도해볼 것 — 어느 버전부터 회귀가 생겼는지는 아직 특정 못 함.
+1. Kaggle에서 `outputs/merged_plain`(fp16 베이스에 순정 peft로 병합된 모델,
+   병합 자체는 성공 확인됨)을 zip으로 다운로드 → 로컬 `outputs/merged_plain`에
+   압축 해제.
+2. 로컬에서 `bash src/serving/build_ollama_model.sh outputs/merged_plain`로 GGUF
+   변환 + Ollama 등록.
+3. `python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetuned`로
+   `eval.jsonl` 전체(405건) 정량 재평가.
+4. **판정 기준**: GGUF/Ollama 결과가 unsloth 네이티브 추론 때처럼 정상적인 HS코드를
+   생성하면 8절의 가설(llama.cpp는 이 불일치에서 자유로움)이 맞은 것 — 결과를
+   `docs/11-experiment3_*_result.md`로 기록. 만약 GGUF에서도 같은 희귀 단어
+   증상이 재현되면, `convert_hf_to_gguf.py`가 변환 시점에 참조하는 것도 순정
+   transformers의 Gemma-2 구현이라 같은 불일치를 상속받는다는 뜻이므로, GGUF
+   변환을 unsloth가 직접 지원하는 경로(`model.save_pretrained_gguf()` 등)로
+   바꾸는 것을 검토해야 한다.
