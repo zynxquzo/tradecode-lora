@@ -227,16 +227,33 @@ unsloth의 사전 양자화 체크포인트(`unsloth/gemma-2-2b-bnb-4bit`)에서
 공식 지원 워크플로우라, 지금까지 겪은 문제들(예: 사전 양자화 체크포인트 특유의
 `Params4bit` 처리) 없이 정상 동작할 것으로 기대된다.
 
+## 11. 재학습 성공 — 순정 경로에서도 정상 생성 확인
+
+unsloth 제거 후 재학습하면서 두 가지 인프라 문제를 추가로 겪었다 (둘 다 Kaggle의
+GPU 2장(T4 x2) 환경 특유의 문제, `train.py`에 반영):
+- `google/gemma-2-2b`는 라이선스 동의가 필요한 gated 저장소라 인증 없이 401로
+  막힘 → unsloth가 올려둔 ungated 미러 `unsloth/gemma-2-2b`(fp16, 가중치
+  호스팅만 unsloth 계정일 뿐 unsloth의 학습 코드 패치와는 무관함)로 기본값 변경.
+- `device_map="auto"`가 모델을 GPU 2장에 나눠 올리자 Trainer가 자동으로
+  `nn.DataParallel`을 씌우며 `CUBLAS_STATUS_EXECUTION_FAILED`로 충돌 →
+  `CUDA_VISIBLE_DEVICES=0`을 CUDA 초기화 전에 강제해 GPU 1장만 보이게 고정.
+
+스모크 테스트(60 step)에서 loss 2.22 → 0.06, `mean_token_accuracy` 0.43 → 0.97+
+로 정상 수렴 확인 후 본 학습 진행, `merge_adapter_plain.py`로 병합, 순정
+transformers `AutoModelForCausalLM.from_pretrained()` + `generate()`로 생성
+테스트 — **10건 중 9건 정확히 일치, 1건은 근접 오류(`6101`→`6110`, 같은 61류
+내 혼동)**, 형식도 전부 올바른 JSON. unsloth를 제거하고 학습·추론이 같은 계산
+경로(순정 transformers)를 쓰게 만든 것으로 실험 3 전체를 관통한 문제가
+해결됐다.
+
 ## 다음 단계
 
-1. 새 `train.py`로 Kaggle에서 재학습 (`--lora-r 32 --lora-alpha 64
-   --target-modules q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj`,
-   데이터는 기존 `data/processed_simple` 그대로).
-2. `merge_adapter_plain.py`로 병합.
-3. 순정 transformers 생성 스모크 테스트로 정상 출력(`{"hs_code": "NNNN"}` 형태)
-   나오는지 확인 — 이번엔 unsloth와 무관한 경로로 학습했으니 정상이어야 한다.
-4. 정상이면 GGUF 변환 → Ollama 등록 → `eval.jsonl` 전체(405건) 정량 재평가 →
-   `docs/11-experiment3_*_result.md`로 기록.
+1. ~~새 `train.py`로 Kaggle에서 재학습~~ **완료.**
+2. ~~`merge_adapter_plain.py`로 병합~~ **완료.**
+3. ~~순정 transformers 생성 스모크 테스트~~ **완료, 정상 확인.**
+4. `outputs/merged`를 로컬로 다운로드 → GGUF 변환(`src/serving/build_ollama_model.sh`)
+   → Ollama 등록 → `eval.jsonl` 전체(405건) 정량 재평가(`src/eval/baseline_eval.py`)
+   → 결과를 `docs/11-experiment3_result.md`로 기록.
 5. 혹시 이번에도 실패하면(가능성은 낮지만), 그때는 정말로 데이터/학습
    하이퍼파라미터 쪽 문제일 가능성이 높다 — 프레임워크 조합은 이걸로 완전히
    소거됐기 때문이다.
