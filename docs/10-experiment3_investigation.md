@@ -1,10 +1,10 @@
-# 실험 3 진행 기록: 데이터 다양화, 타깃 단순화, 그리고 진짜 근본 원인 확인
+# 실험 3 진행 기록: 데이터 다양화, 타깃 단순화, unsloth 제거, 그리고 97.53% 달성
 
 `docs/09-experiment3-plan.md`에서 세운 계획(데이터 다양화 + LoRA 용량 원복)을
 실행하고, 그 과정에서 예상 못한 문제를 추적한 기록. **5·6절의 "unsloth 병합
 자체의 버그"라는 결론은 재학습 후 재검증 과정에서 틀린 것으로 확인됐다 — 실제
-원인은 7절 참고.** 아직 최종 결론(GGUF/Ollama 정량 평가)에는 도달하지 못했고,
-다음 세션에서 이어서 진행해야 한다.
+원인은 7절 참고.** 최종적으로 `eval.jsonl` 405건 기준 **Exact Match 97.53%**를
+달성했다(13절).
 
 ## 1. 데이터 다양화 (완료)
 
@@ -246,14 +246,50 @@ transformers `AutoModelForCausalLM.from_pretrained()` + `generate()`로 생성
 경로(순정 transformers)를 쓰게 만든 것으로 실험 3 전체를 관통한 문제가
 해결됐다.
 
+## 12. GGUF/Ollama 배포 직전에 발견한 마지막 버그: 프롬프트 템플릿 이중 적용
+
+`outputs/merged`를 GGUF로 변환해 Ollama에 등록하고 `ollama run`으로 생성 테스트를
+해보니 `{"` 만 반복하는 새로운 증상이 나왔다 — 11절까지의 성공(순정 transformers
+`generate()`)과 모순되는 것처럼 보였지만, 원인은 가중치가 아니라 **Ollama가
+`/api/generate` 호출 시 프롬프트에 Gemma의 채팅 템플릿(`<start_of_turn>...`)을
+자동으로 씌운다는 것**이었다. 이 모델은 채팅 템플릿이 아니라 `train.py`의 순수
+Alpaca 스타일 프롬프트(`### Instruction:\n...\n### Response:\n`)로 학습됐으므로,
+템플릿이 덧씌워지면 학습 때와 다른 입력이 들어가 무너진다.
+
+`src/eval/baseline_eval.py`의 `call_ollama()`도 `raw` 옵션을 안 넘겨서 같은
+문제를 그대로 갖고 있었다 — **재평가 스크립트 자체가 고쳐지지 않았다면 정량
+평가 결과 전체가 이 버그로 오염됐을 것**이다. `predict()`에서 `prompt_style ==
+"finetuned"`일 때만 `raw=True`를 넘기도록 고쳤다(zero_shot은 베이스 모델
+평가용이라 채팅 템플릿이 적용되는 게 정상 사용법이라 그대로 둠). 고친 뒤
+curl 수준 테스트로 정상 출력 확인.
+
+## 13. 최종 결과: `eval.jsonl` 전체(405건) 정량 평가
+
+`docs/11-experiment3_finetuned_result.md`에 원본 리포트 기록. 요약:
+
+| 지표 | 점수 |
+|---|---|
+| Exact Match (4자리) | **97.53%** |
+| Partial Match (2자리) | 100.00% |
+| Top-3 Recall | 97.53% |
+| Parse Failure Rate | 0.00% |
+
+실험 1(baseline/fine-tuned 둘 다 0%대)과 실험 2(mode collapse)를 거쳐, 실험
+3에서 데이터 다양화(1절) → completion 단순화(4절) → unsloth 제거(10절) →
+프롬프트 템플릿 이중 적용 수정(12절)까지 거친 끝에 나온 결과. **실험 3, 그리고
+이 프로젝트 전체의 최종 목표(HS코드 분류 LoRA 파인튜닝)가 실질적으로 달성됐다.**
+
 ## 다음 단계
 
-1. ~~새 `train.py`로 Kaggle에서 재학습~~ **완료.**
-2. ~~`merge_adapter_plain.py`로 병합~~ **완료.**
-3. ~~순정 transformers 생성 스모크 테스트~~ **완료, 정상 확인.**
-4. `outputs/merged`를 로컬로 다운로드 → GGUF 변환(`src/serving/build_ollama_model.sh`)
-   → Ollama 등록 → `eval.jsonl` 전체(405건) 정량 재평가(`src/eval/baseline_eval.py`)
-   → 결과를 `docs/11-experiment3_result.md`로 기록.
+실험 3의 핵심 목표는 달성됐다. 남은 건 다듬는 작업 수준:
+
+1. `docs/12-*` 또는 README에 실험 3 최종 결과를 요약 반영 (baseline vs
+   fine-tuned 비교 표 등).
+2. 필요하면 misclassified 10건(2.47%)을 살펴봐 패턴이 있는지 확인 — 지금
+   수준(97.53%)에서는 우선순위 낮음.
+3. `merge_adapter.py`(unsloth 경로)는 이제 활성 파이프라인에서 완전히 안 쓰이니,
+   과거 조사 기록 가치만 남기고 README/문서에서 "쓰지 않음"으로 명확히 표시된
+   상태를 유지.
 5. 혹시 이번에도 실패하면(가능성은 낮지만), 그때는 정말로 데이터/학습
    하이퍼파라미터 쪽 문제일 가능성이 높다 — 프레임워크 조합은 이걸로 완전히
    소거됐기 때문이다.
