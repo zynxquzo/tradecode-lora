@@ -79,6 +79,16 @@ def run(args: argparse.Namespace) -> None:
     for name, param in quantized_model.named_parameters():
         if name not in fp16_state_dict:
             fp16_state_dict[name] = param.data.to(torch.float16)
+
+    # Gemma-2는 lm_head가 embed_tokens와 가중치를 공유(tie_word_embeddings=True)한다 -
+    # named_parameters()는 기본적으로 동일 텐서를 가리키는 중복 키를 하나만 남기고
+    # 건너뛰므로, 두 키 중 하나가 fp16_state_dict에서 빠져 있을 수 있다. 로드할
+    # 모델도 같은 config(tie_word_embeddings=True)라 두 키 모두 필요하니 채워 넣는다.
+    if "lm_head.weight" not in fp16_state_dict and "model.embed_tokens.weight" in fp16_state_dict:
+        fp16_state_dict["lm_head.weight"] = fp16_state_dict["model.embed_tokens.weight"]
+    elif "model.embed_tokens.weight" not in fp16_state_dict and "lm_head.weight" in fp16_state_dict:
+        fp16_state_dict["model.embed_tokens.weight"] = fp16_state_dict["lm_head.weight"]
+
     logger.info(
         "역양자화한 Linear4bit 모듈 수: %d / 전체 유지 파라미터: %d",
         dequantized_count, len(fp16_state_dict),
