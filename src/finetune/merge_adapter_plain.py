@@ -61,17 +61,31 @@ def run(args: argparse.Namespace) -> None:
     tokenizer = AutoTokenizer.from_pretrained(base_model_name)
 
     logger.info("베이스를 fp16으로 역양자화 (LoRA 병합을 4bit 공간에서 하지 않기 위해)")
+    # bnb Linear4bit의 quant_state는 state_dict()에 실제 가중치("...weight")와 별개로
+    # "...weight.absmax", "...weight.quant_map" 등 보조 텐서로도 평탄화되어 나온다.
+    # 이건 순정 모델 구조엔 없는 키라 그대로 두면 load_state_dict(strict=True)가
+    # "Unexpected key(s)"로 죽는다 - 실제 가중치만 남기고 걸러낸다.
+    QUANT_STATE_KEY_MARKERS = (
+        ".absmax", ".quant_map", ".nested_absmax", ".nested_quant_map", ".quant_state.",
+    )
     quantized_state_dict = quantized_model.state_dict()
     fp16_state_dict = {}
     dequantized_count = 0
+    skipped_count = 0
     for name, param in quantized_state_dict.items():
+        if any(marker in name for marker in QUANT_STATE_KEY_MARKERS):
+            skipped_count += 1
+            continue
         quant_state = getattr(param, "quant_state", None)
         if quant_state is not None:
             fp16_state_dict[name] = bnb_functional.dequantize_4bit(param.data, quant_state).to(torch.float16)
             dequantized_count += 1
         else:
             fp16_state_dict[name] = param.to(torch.float16)
-    logger.info("역양자화한 파라미터 수: %d / 전체 %d", dequantized_count, len(fp16_state_dict))
+    logger.info(
+        "역양자화한 파라미터 수: %d / 걸러낸 보조 키 수: %d / 전체 유지 파라미터: %d",
+        dequantized_count, skipped_count, len(fp16_state_dict),
+    )
 
     config = AutoConfig.from_pretrained(base_model_name)
     # 베이스 config에는 quantization_config가 남아있어 그대로 두면 다시 4bit로 로드를
