@@ -1,5 +1,5 @@
 """
-data/processed/train.jsonl(880건)로 google/gemma-2-2b를 QLoRA(순정 transformers +
+data/processed/train.jsonl(880건)로 gemma-2-2b를 QLoRA(순정 transformers +
 peft + trl)로 파인튜닝하는 스크립트. Colab/Kaggle(T4 GPU) 실행을 전제로 작성했다 —
 이 저장소를 관리하는 로컬 머신에는 CUDA GPU가 없어 이 스크립트는 로컬에서
 실행/검증되지 않았다.
@@ -303,10 +303,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-model",
         type=str,
-        default="google/gemma-2-2b",
-        help="HF 모델명 (기본값은 순정 fp16 체크포인트 - QLoRA로 학습 시점에 4bit 동적 양자화한다. "
-        "unsloth의 사전 양자화 체크포인트(-bnb-4bit)는 unsloth 전용 처리 방식과 얽혀 있어 "
-        "더 이상 쓰지 않는다, docs/10-experiment3_investigation.md 참고)",
+        default="unsloth/gemma-2-2b",
+        help="HF 모델명 (기본값은 unsloth가 올려둔 ungated fp16 미러 - QLoRA로 학습 시점에 "
+        "4bit 동적 양자화한다. google/gemma-2-2b 원본은 라이선스 동의/인증이 필요한 "
+        "gated 저장소라 피했다. 이 미러는 가중치 호스팅만 unsloth 계정일 뿐 unsloth의 "
+        "학습 코드 패치와는 무관하다 - unsloth의 사전 양자화 체크포인트(-bnb-4bit)와 "
+        "달리 순정 transformers로 그대로 로드된다. docs/10-experiment3_investigation.md 참고)",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--training-log", type=Path, default=Path("docs/02-training_log.md"))
