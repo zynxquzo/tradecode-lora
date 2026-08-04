@@ -15,12 +15,14 @@ transformers + peft.PeftModel.merge_and_unload()로 병합한다.
   "llama.cpp는 이 문제에서 자유로울 것"이라는 가설도 기각됐으므로, 남은 유력한 원인은
   fp16 대체 베이스가 학습에 쓴 4bit 베이스와 미묘하게 다른 체크포인트라는 것이다.
 
-그래서 이 스크립트는 별도 fp16 리포로 바꾸지 않고, 학습에 실제로 쓰인 4bit 베이스
-그대로에 병합한 뒤, peft가 재양자화한 4bit 가중치를 bitsandbytes로 직접
-역양자화(dequantize)해서 순수 fp16 state_dict를 만들어 저장한다. (peft의
-Linear4bit.merge()는 병합 결과를 다시 4bit로 양자화해서 보관하는데, 이 상태를 그대로
-save_pretrained()하면 최신 transformers의 revert_weight_conversion()이 처리하지
-못해 NotImplementedError가 난다 — 그래서 저장 전에 수동으로 역양자화가 필요하다.)
+그래서 이 스크립트는 별도 fp16 리포로 바꾸지 않고, 학습에 실제로 쓰인 4bit 체크포인트
+그대로를 읽되(그 파일이 4bit로 저장돼 있어 읽는 것 자체는 bnb 없이는 불가능하다),
+**LoRA를 얹기 전에 먼저 역양자화**한다. peft의 Linear4bit.merge()는 병합 결과를 다시
+4bit로 양자화해서 보관하기 때문에(그 상태로 save_pretrained()하면 최신 transformers의
+revert_weight_conversion()이 처리하지 못해 NotImplementedError가 난다), 병합을 4bit
+공간에서 하지 않도록 순서를 바꿔 이 문제를 원천적으로 피한다: 베이스를 fp16으로
+역양자화 -> 순정 nn.Linear로 재구성 -> 그 위에 LoRA를 얹고 병합(평범한 fp16 덧셈,
+재양자화 없음) -> 저장.
 
 사용 예:
   python src/finetune/merge_adapter_plain.py \
@@ -50,23 +52,19 @@ def run(args: argparse.Namespace) -> None:
     base_model_name = json.loads(adapter_config_path.read_text())["base_model_name_or_path"]
     logger.info("베이스 모델(학습에 실제로 쓰인 4bit 체크포인트 그대로): %s", base_model_name)
 
-    logger.info("베이스 모델 로드 (순정 transformers, 4bit)")
-    base_model = AutoModelForCausalLM.from_pretrained(
+    logger.info("베이스 모델 로드 (4bit, 파일이 이 형식으로만 저장돼 있어 읽기 위해 필요)")
+    quantized_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
         dtype=torch.float16,
         device_map="auto",
     )
     tokenizer = AutoTokenizer.from_pretrained(base_model_name)
 
-    logger.info("adapter 로드 및 병합: %s", args.adapter_dir)
-    model = PeftModel.from_pretrained(base_model, str(args.adapter_dir))
-    model = model.merge_and_unload()
-
-    logger.info("병합 결과 역양자화 (4bit -> fp16)")
-    merged_state_dict = model.state_dict()
+    logger.info("베이스를 fp16으로 역양자화 (LoRA 병합을 4bit 공간에서 하지 않기 위해)")
+    quantized_state_dict = quantized_model.state_dict()
     fp16_state_dict = {}
     dequantized_count = 0
-    for name, param in merged_state_dict.items():
+    for name, param in quantized_state_dict.items():
         quant_state = getattr(param, "quant_state", None)
         if quant_state is not None:
             fp16_state_dict[name] = bnb_functional.dequantize_4bit(param.data, quant_state).to(torch.float16)
@@ -75,17 +73,25 @@ def run(args: argparse.Namespace) -> None:
             fp16_state_dict[name] = param.to(torch.float16)
     logger.info("역양자화한 파라미터 수: %d / 전체 %d", dequantized_count, len(fp16_state_dict))
 
-    logger.info("역양자화된 가중치로 순수 fp16 모델 재구성")
     config = AutoConfig.from_pretrained(base_model_name)
     # 베이스 config에는 quantization_config가 남아있어 그대로 두면 다시 4bit로 로드를
     # 시도하니, 순수 fp16 모델임을 명시하기 위해 제거한다.
     config.quantization_config = None
-    fp16_model = AutoModelForCausalLM.from_config(config, dtype=torch.float16)
-    fp16_model.load_state_dict(fp16_state_dict, strict=True)
+    del quantized_model, quantized_state_dict
+    torch.cuda.empty_cache()
+
+    base_model = AutoModelForCausalLM.from_config(config, dtype=torch.float16)
+    base_model.load_state_dict(fp16_state_dict, strict=True)
+    base_model = base_model.to("cuda" if torch.cuda.is_available() else "cpu")
+    del fp16_state_dict
+
+    logger.info("adapter 로드 및 병합 (순정 fp16 nn.Linear 위에서, 재양자화 없이)")
+    model = PeftModel.from_pretrained(base_model, str(args.adapter_dir))
+    model = model.merge_and_unload()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("병합 모델 저장: %s", args.output_dir)
-    fp16_model.save_pretrained(str(args.output_dir), safe_serialization=True)
+    model.save_pretrained(str(args.output_dir), safe_serialization=True)
     tokenizer.save_pretrained(str(args.output_dir))
 
     # AutoTokenizer.save_pretrained()가 fast tokenizer 파일만 저장하고 sentencepiece
