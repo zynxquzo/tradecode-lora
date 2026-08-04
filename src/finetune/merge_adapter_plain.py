@@ -45,6 +45,7 @@ def run(args: argparse.Namespace) -> None:
 
     import bitsandbytes.functional as bnb_functional
     import torch
+    from bitsandbytes.nn import Linear4bit
     from peft import PeftModel
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
@@ -61,37 +62,33 @@ def run(args: argparse.Namespace) -> None:
     tokenizer = AutoTokenizer.from_pretrained(base_model_name)
 
     logger.info("베이스를 fp16으로 역양자화 (LoRA 병합을 4bit 공간에서 하지 않기 위해)")
-    # bnb Linear4bit의 quant_state는 state_dict()에 실제 가중치("...weight")와 별개로
-    # "...weight.absmax", "...weight.quant_map" 등 보조 텐서로도 평탄화되어 나온다.
-    # 이건 순정 모델 구조엔 없는 키라 그대로 두면 load_state_dict(strict=True)가
-    # "Unexpected key(s)"로 죽는다 - 실제 가중치만 남기고 걸러낸다.
-    QUANT_STATE_KEY_MARKERS = (
-        ".absmax", ".quant_map", ".nested_absmax", ".nested_quant_map", ".quant_state.",
-    )
-    quantized_state_dict = quantized_model.state_dict()
+    # model.state_dict()를 거치면 bnb.nn.Params4bit의 quant_state 속성이 유실되고
+    # 4bit로 패킹된 원본 바이트가 그대로 나온다(shape가 [N, 1]처럼 찌그러져 있음) -
+    # quant_state는 살아있는 모듈 객체(module.weight)에서 직접 읽어야 한다.
     fp16_state_dict = {}
     dequantized_count = 0
-    skipped_count = 0
-    for name, param in quantized_state_dict.items():
-        if any(marker in name for marker in QUANT_STATE_KEY_MARKERS):
-            skipped_count += 1
-            continue
-        quant_state = getattr(param, "quant_state", None)
-        if quant_state is not None:
-            fp16_state_dict[name] = bnb_functional.dequantize_4bit(param.data, quant_state).to(torch.float16)
+    for name, module in quantized_model.named_modules():
+        if isinstance(module, Linear4bit):
+            weight_key = f"{name}.weight" if name else "weight"
+            fp16_state_dict[weight_key] = bnb_functional.dequantize_4bit(
+                module.weight.data, module.weight.quant_state
+            ).to(torch.float16)
             dequantized_count += 1
-        else:
-            fp16_state_dict[name] = param.to(torch.float16)
+            if module.bias is not None:
+                fp16_state_dict[f"{name}.bias"] = module.bias.data.to(torch.float16)
+    for name, param in quantized_model.named_parameters():
+        if name not in fp16_state_dict:
+            fp16_state_dict[name] = param.data.to(torch.float16)
     logger.info(
-        "역양자화한 파라미터 수: %d / 걸러낸 보조 키 수: %d / 전체 유지 파라미터: %d",
-        dequantized_count, skipped_count, len(fp16_state_dict),
+        "역양자화한 Linear4bit 모듈 수: %d / 전체 유지 파라미터: %d",
+        dequantized_count, len(fp16_state_dict),
     )
 
     config = AutoConfig.from_pretrained(base_model_name)
     # 베이스 config에는 quantization_config가 남아있어 그대로 두면 다시 4bit로 로드를
     # 시도하니, 순수 fp16 모델임을 명시하기 위해 제거한다.
     config.quantization_config = None
-    del quantized_model, quantized_state_dict
+    del quantized_model
     torch.cuda.empty_cache()
 
     base_model = AutoModelForCausalLM.from_config(config, dtype=torch.float16)
