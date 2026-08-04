@@ -41,10 +41,18 @@ def run(args: argparse.Namespace) -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     adapter_config_path = args.adapter_dir / "adapter_config.json"
-    base_model_name = json.loads(adapter_config_path.read_text())["base_model_name_or_path"]
-    logger.info("베이스 모델: %s", base_model_name)
+    trained_base_name = json.loads(adapter_config_path.read_text())["base_model_name_or_path"]
 
-    logger.info("베이스 모델 로드 (순정 transformers, 4bit)")
+    # 학습에 쓴 베이스는 4bit(bnb) 사전 양자화 체크포인트라, peft가 거기에 병합하면
+    # 결과를 다시 4bit로 재양자화한다(bnb.py의 Linear4bit.merge()). 이 재양자화된
+    # 상태를 최신 transformers의 safetensors 저장 로직(core_model_loading.py의
+    # revert_weight_conversion)이 아직 지원하지 않아 save_pretrained()가
+    # NotImplementedError로 죽는다. LoRA 가중치는 dtype에 무관하게 모듈 이름/shape만
+    # 맞으면 병합되므로, 같은 모델의 fp16(비양자화) 버전에 병합해 이 문제를 피한다.
+    base_model_name = args.full_precision_base or trained_base_name.removesuffix("-bnb-4bit")
+    logger.info("학습 베이스(4bit): %s / 병합에 쓸 fp16 베이스: %s", trained_base_name, base_model_name)
+
+    logger.info("베이스 모델 로드 (순정 transformers, fp16)")
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
         dtype=torch.float16,
@@ -68,6 +76,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapter-dir", type=Path, default=Path("outputs/adapter"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/merged_plain"))
+    parser.add_argument(
+        "--full-precision-base",
+        type=str,
+        default=None,
+        help="병합에 쓸 fp16 베이스 모델명. 생략하면 adapter_config.json의 "
+        "base_model_name_or_path에서 '-bnb-4bit' 접미사만 제거해 자동 유추한다 "
+        "(예: unsloth/gemma-2-2b-bnb-4bit -> unsloth/gemma-2-2b).",
+    )
     return parser.parse_args()
 
 
