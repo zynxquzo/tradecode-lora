@@ -12,11 +12,19 @@ outputs/
 
 # Data (raw 데이터는 저작권/용량 이슈로 제외 검토)
 data/raw/*.csv
+data/raw/*.csv.bak
 data/raw/*.json
 
 # 증강/전처리 산출물 (augment.py, preprocess.py로 재생성 가능 - schema_example.jsonl은 예외)
 data/processed/*.jsonl
 !data/processed/schema_example.jsonl
+data/processed_simple/
+
+# llama.cpp 배포 바이너리 (재다운로드 가능, 용량 큼)
+llama-cpp-bin/
+
+# 실행 로그
+*.log
 
 # 환경변수
 .env
