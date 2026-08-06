@@ -28,6 +28,8 @@ HS6_SHEET = "HS6단위(5단위포함)"
 def load_hs2(ws) -> dict[str, str]:
     out = {}
     for code, kor, _eng in ws.iter_rows(min_row=2, values_only=True):
+        if kor is None:
+            continue
         out[str(code)] = kor.strip()
     return out
 
@@ -35,6 +37,8 @@ def load_hs2(ws) -> dict[str, str]:
 def load_hs4(ws) -> dict[str, tuple[str, str]]:
     out = {}
     for code, kor, eng in ws.iter_rows(min_row=2, values_only=True):
+        if kor is None or eng is None:
+            continue
         out[str(code)] = (kor.strip(), eng.strip())
     return out
 
