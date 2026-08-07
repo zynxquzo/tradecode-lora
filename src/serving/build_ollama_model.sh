@@ -2,7 +2,7 @@
 # 병합된 HF 모델(outputs/merged)을 GGUF로 변환하고 Ollama에 등록한다.
 #
 # 사전 조건:
-#   - src/finetune/merge_adapter.py 실행 완료 (outputs/merged에 병합 모델 존재)
+#   - src/finetune/merge_adapter_plain.py 실행 완료 (outputs/merged에 병합 모델 존재)
 #   - llama.cpp 클론 완료 (아래 LLAMA_CPP_DIR 지정) - convert_hf_to_gguf.py는 순수
 #     Python이라 클론만 하면 되고 빌드는 필요 없다
 #   - llama-quantize 실행 파일 - 소스 빌드(cmake) 하거나, Windows에서 cmake/MSVC가
