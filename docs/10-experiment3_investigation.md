@@ -271,7 +271,6 @@ curl 수준 테스트로 정상 출력 확인.
 |---|---|
 | Exact Match (4자리) | **97.53%** |
 | Partial Match (2자리) | 100.00% |
-| Top-3 Recall | 97.53% |
 | Parse Failure Rate | 0.00% |
 
 실험 1(baseline/fine-tuned 둘 다 0%대)과 실험 2(mode collapse)를 거쳐, 실험

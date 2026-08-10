@@ -5,7 +5,6 @@
 | Exact Match (6자리) | 0.36% | 0.00% | -0.36%p |
 | Partial Match (4자리) | 3.57% | 0.00% | -3.57%p |
 | Partial Match (2자리) | 38.93% | 0.00% | -38.93%p |
-| Top-3 Recall | 0.71% | 0.00% | -0.71%p |
 | Parse Failure Rate | (baseline 리포트엔 없음, 샘플상 낮음) | 100.00% | 악화 |
 
 (fine-tuned: `docs/03-finetuned_result.md`, 280건 전체, `tradecode-gemma2` Q4_K_M, 2026-07-23)
