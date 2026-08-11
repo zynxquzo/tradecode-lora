@@ -120,7 +120,9 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 tradecode-lora/
 ├── data/
 │   ├── raw/                 원본 CSV (git 제외)
-│   └── processed/           instruction 포맷 jsonl (train/eval/augmented)
+│   ├── processed/           augmented.jsonl 등 중간 산출물 (git 제외)
+│   └── processed_simple/    실제 학습에 쓰는 train/eval jsonl, --simple-target
+│                            + group split 적용 (git 제외, 실험 3~)
 ├── src/
 │   ├── finetune/
 │   │   ├── extract_hs_reference.py  관세청 HS코드 품목분류표에서 특정 류 참조
@@ -134,6 +136,8 @@ tradecode-lora/
 │   │   └── baseline_eval.py  Ollama 서빙 모델 평가 (zero-shot/fine-tuned 겸용)
 │   └── serving/
 │       └── build_ollama_model.sh  GGUF 변환 + 양자화 + Ollama 등록
+│                                   (OUT_DIR/MODEL_NAME 환경변수로 출력 경로/모델명
+│                                   오버라이드 가능 - 기존 모델과 비교하며 재학습할 때 사용)
 ├── docs/                     실험 로그 및 결과 리포트
 ├── requirements.txt          로컬(평가/증강)용 의존성
 └── requirements-colab.txt    학습(GPU)용 의존성
@@ -149,8 +153,14 @@ python src/finetune/extract_hs_reference.py --xlsx "<엑셀 경로>" \
 # -> 추출 결과를 data/raw/products_real.csv에 직접 병합해서 사용
 
 python src/finetune/augment.py --input data/raw/products_real.csv --output data/processed/augmented.jsonl
-python src/finetune/preprocess.py --input data/processed/augmented.jsonl --output-dir data/processed --code-length 4
+python src/finetune/preprocess.py --input data/processed/augmented.jsonl --output-dir data/processed_simple --code-length 4 --simple-target
 ```
+`preprocess.py`의 `stratified_split`은 같은 원본 상품에서 나온 레코드(원본 +
+패러프레이징들)를 `_group_id`로 묶어 그룹째로 train 또는 eval 한쪽에만
+배정한다(실험 4에서 추가된 group-aware split — 자세한 배경은
+[`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md)
+참고). `--simple-target`은 completion을 `{"hs_code": "NNNN"}`로 단순화하는
+옵션으로, 실험 3부터 계속 이 설정을 쓴다.
 
 ### 2. Baseline 평가 (로컬, Ollama 필요)
 ```
@@ -160,24 +170,31 @@ python src/eval/baseline_eval.py --model gemma2:2b --prompt-style zero_shot --ou
 ### 3. LoRA 학습 (Colab/Kaggle GPU)
 ```
 pip install -r requirements-colab.txt
+# data/processed_simple/{train,eval}.jsonl을 Kaggle Dataset으로 업로드 후 불러오기
 python src/finetune/train.py --smoke-test --max-steps 60   # 사전 확인
-python src/finetune/train.py                                # 전체 학습 (기본값 = lora_r 16 / attention-only)
-python src/finetune/merge_adapter_plain.py --adapter-dir outputs/adapter --output-dir outputs/merged
+python src/finetune/train.py \
+    --lora-r 32 --lora-alpha 64 \
+    --target-modules q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
+python src/finetune/merge_adapter_plain.py --adapter-dir outputs/adapter --output-dir outputs/merged_plain
 ```
 (순정 transformers + peft(QLoRA) 기반. unsloth를 쓰던 `merge_adapter.py`는
-더 이상 쓰지 않는다 — 이유는 `docs/10-experiment3_investigation.md` 참고.)
+더 이상 쓰지 않는다 — 이유는 `docs/10-experiment3_investigation.md` 참고.
+`notebooks/experiment3_retrain.ipynb`에 Kaggle에서 그대로 실행 가능한 노트북
+버전이 있다.)
 
 ### 4. GGUF 변환 + Ollama 등록 (로컬)
 ```
-bash src/serving/build_ollama_model.sh outputs/merged
+bash src/serving/build_ollama_model.sh outputs/merged_plain
 ```
 
 ### 5. 재평가 (로컬)
 ```
-python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetuned --code-length 4 --output docs/11-experiment3_finetuned_result.md
+python src/eval/baseline_eval.py --eval-file data/processed_simple/eval.jsonl \
+    --model tradecode-gemma2 --prompt-style finetuned --code-length 4 \
+    --output docs/13-experiment4_leakfixed_result.md
 ```
 (`--code-length`는 `preprocess.py`로 데이터를 만들 때 쓴 자릿수와 반드시 맞춰야
-한다 — 실험 3은 4자리.)
+한다 — 실험 3부터 4자리.)
 
 ## 배운 점
 
