@@ -3,7 +3,7 @@
 상품설명 텍스트를 입력받아 HS코드(품목분류코드)를 추천하는 경량 파인튜닝 모델
 (Gemma2-2B + LoRA) 및 로컬 서빙 프로젝트.
 
-## Status: ✅ 실험 3 완료 — Exact Match 97.53% 달성
+## Status: ✅ 실험 4 완료 — 데이터 누수 제거 후 Exact Match 93.46%
 
 Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 → 재평가로
 이어지는 전체 파이프라인을 구축했고, 세 차례 실험을 거치며 실패를 원인까지
@@ -29,11 +29,25 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
   병합 방법을 몇 가지로 바꿔봐도 항상 실패한다**는 걸 확인했다. 학습을 순정
   transformers + peft(QLoRA)로 바꿔 이 불일치 자체를 없앤 뒤 재학습 →
   **eval.jsonl 405건 기준 Exact Match 97.53%** 달성.
+- **실험 4** (완료): 실험 3의 97.53%를 검증하는 과정에서 **train/eval 데이터
+  누수**를 발견했다. `preprocess.py`가 원본 상품설명 1건과 그 패러프레이징
+  3건(같은 상품을 문체만 바꿔 GPT-4o-mini로 증강한 것)을 클래스 단위로만
+  나누고 개별 레코드 단위로 train/eval에 무작위 배정했던 탓에, eval 문장의
+  87%(405건 중 354건)가 train에 있는 어떤 문장과 같은 클래스이면서 단어 절반
+  이상 겹치는 근접 중복이었다 — 사실상 "같은 상품을 다른 말투로 다시 물어봤을
+  때 기억해내는 능력"을 정확도로 측정하고 있었던 것. 같은 원본에서 나온
+  레코드를 그룹으로 묶어 통째로 train 또는 eval 한쪽에만 배정하도록
+  (group split) `preprocess.py`를 고치고, eval로 뽑힌 그룹은 원본만 남기고
+  패러프레이징은 버려 근접 중복도 없앴다 → train 1,564건/eval 107건으로
+  재구성해 재학습 → **eval.jsonl 107건 기준 Exact Match 93.46%**. 97.53%
+  대비 -4.07%p로, 우려했던 것만큼 크게 떨어지지 않아 모델이 단순 암기를 넘어
+  어느 정도 일반화 가능한 패턴을 배웠다는 근거가 됐다.
 
 자세한 경과는 [`docs/04-comparison.md`](docs/04-comparison.md)(실험 1),
 [`docs/08-experiment2_training_log.md`](docs/08-experiment2_training_log.md)(실험 2 원인 분석),
-[`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md)(실험 3 전체 조사 기록)에
-정리했다.
+[`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md)(실험 3 전체 조사 기록),
+[`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md)(실험 4 데이터 누수
+제거 및 재평가 결과)에 정리했다.
 
 ## 결과 요약
 
@@ -70,6 +84,17 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 
 원본 리포트: [`docs/11-experiment3_finetuned_result.md`](docs/11-experiment3_finetuned_result.md).
 
+**실험 4** (4자리 타깃, train/eval 데이터 누수 제거, 107건 재평가)
+
+| 지표 | Fine-tuned (LoRA) |
+|---|---|
+| Exact Match (4자리) | **93.46%** |
+| Partial Match (2자리) | 99.07% |
+| Top-3 Recall | 93.46% |
+| Parse Failure Rate | 0.93% |
+
+원본 리포트: [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md).
+
 ## 문서
 
 | 문서 | 내용 |
@@ -86,6 +111,8 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 | [`docs/09-experiment3-plan.md`](docs/09-experiment3-plan.md) | 실험 3 계획 (데이터 다양화 + LoRA 설정 원복) |
 | [`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md) | 실험 3 전체 조사 기록 (unsloth 근본 원인 규명 포함) |
 | [`docs/11-experiment3_finetuned_result.md`](docs/11-experiment3_finetuned_result.md) | 실험 3 최종 파인튜닝 재평가 결과 (405건, Exact 97.53%) |
+| [`docs/12-experiment4_leakfixed_training_log.md`](docs/12-experiment4_leakfixed_training_log.md) | 실험 4 학습 로그 (누수 제거 데이터로 재학습) |
+| [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md) | 실험 4 파인튜닝 재평가 결과 (107건, Exact 93.46%) |
 
 ## 폴더 구조
 
@@ -193,3 +220,12 @@ python src/eval/baseline_eval.py --model tradecode-gemma2 --prompt-style finetun
   이 자동 래핑 때문에 학습 때와 다른 입력이 들어가 겉보기엔 "병합이 잘못됐나?"
   싶은 증상이 재현된다. 재평가 스크립트(`baseline_eval.py`)가 이 버그를 그대로
   갖고 있었다면 정량 평가 결과 전체가 조용히 오염됐을 것이다.
+- **데이터 증강은 클래스 단위가 아니라 원본(소스) 단위로 split해야 한다**:
+  실험 3의 `preprocess.py`는 "같은 클래스 내에서 원본을 증강본보다 eval에
+  우선 배정"하는 방식으로 데이터 누수를 어느 정도 막으려 했지만, 정작 같은
+  원본에서 나온 패러프레이징들끼리는 여전히 train/eval에 무작위로 흩어졌다.
+  그 결과 eval 문장의 87%가 train에 있는 근접 중복이었다 — "클래스가 겹치지
+  않게"만으로는 부족하고, "패러프레이징의 원본 소스가 겹치지 않게"까지
+  split 단위를 좁혀야 한다는 걸 확인했다. 고친 뒤에도(누수 제거 후에도)
+  93%대 정확도가 유지된 게 오히려 이 모델이 완전한 암기는 아니었다는 걸
+  보여준 셈이다.

@@ -26,8 +26,8 @@ set -euo pipefail
 MERGED_DIR="${1:-outputs/merged}"
 QUANT_LEVEL="${2:-Q4_K_M}"   # 로컬 서빙 속도/용량 균형을 위한 선택 (Q4_K_M: 품질 손실 적고 용량 대비 속도 우수)
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-./llama.cpp}"
-OUT_DIR="outputs/gguf"
-MODEL_NAME="tradecode-gemma2"
+OUT_DIR="${OUT_DIR:-outputs/gguf}"
+MODEL_NAME="${MODEL_NAME:-tradecode-gemma2}"
 
 mkdir -p "$OUT_DIR"
 

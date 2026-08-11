@@ -19,9 +19,15 @@ data/raw/*.json
 data/processed/*.jsonl
 !data/processed/schema_example.jsonl
 data/processed_simple/
+data/processed_simple_leaky_backup/
 
 # llama.cpp 배포 바이너리 (재다운로드 가능, 용량 큼)
 llama-cpp-bin/
+llama_bin/
+
+# 에디터/도구 로컬 설정
+.vscode/
+.claude/
 
 # 실행 로그
 *.log

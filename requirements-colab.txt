@@ -15,9 +15,15 @@
 # 고정하지 않았다.
 # trl 버전을 올려야 하면: 1) 이 핀을 올리고 2) train.py 상단 주석의 API 노트와
 # SFTConfig/SFTTrainer 호출부를 새 버전 시그니처에 맞춰 같이 수정할 것.
+# peft(버전 미고정)가 병합 시 torchao 백엔드 dispatch 가능 여부를 체크하는데,
+# Kaggle 기본 이미지의 torchao(0.10.0)가 peft가 요구하는 최소 버전(0.16.0)보다
+# 낮으면 조용히 건너뛰지 않고 ImportError를 던진다(merge_adapter_plain.py 실행 시
+# "Found an incompatible version of torchao" 에러). torchao를 실제로 쓰지 않는
+# 병합 경로인데도 걸리는 순전한 버전 체크 문제라, torchao만 최신으로 올려 회피한다.
 transformers
 trl==0.24.0
 peft
 accelerate
 bitsandbytes
 datasets
+torchao>=0.16.0

@@ -6,9 +6,11 @@ split을 수행하는 스크립트.
 augmented.jsonl의 각 라인 형식(augment.py 출력):
   {"description": str, "hs_code": str(6자리), "confidence_basis": str, "is_augmented": bool}
 
-eval 배정 원칙: 같은 클래스 내에서 원본(is_augmented=false)을 증강본보다 우선 배정한다.
-증강 데이터로 평가하면 모델이 학습에 쓴 문장과 유사한 문장으로 평가받게 되어
-지표가 실제보다 부풀려질 수 있기 때문이다.
+eval 배정 원칙: 같은 원본에서 나온 레코드(원본 + 패러프레이징들)를 그룹으로 묶어
+통째로 train 또는 eval 한쪽에만 배정하고(group split), eval로 뽑힌 그룹은 원본만
+eval에 쓴다. 클래스 단위로만 나누고 그룹을 무시하면, eval 원본과 거의 같은 내용의
+패러프레이징이 train에 남아 데이터 누수(near-duplicate leakage)가 생겨 지표가
+실제보다 부풀려진다.
 
 사용 예:
   python src/finetune/preprocess.py --input data/processed/augmented.jsonl \
@@ -32,12 +34,21 @@ DEFAULT_CODE_LENGTH = 6
 
 
 def load_augmented_records(path: Path) -> list[dict]:
+    """augmented.jsonl을 로드하고, 같은 원본에서 나온 레코드끼리 묶는 _group_id를 매긴다.
+    augment.py는 원본(is_augmented=False) 1건 뒤에 그 패러프레이징들을 곧바로 이어 쓰므로,
+    파일 순서상 is_augmented=False가 나올 때마다 새 그룹이 시작된다고 볼 수 있다."""
     records = []
+    group_id = -1
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                records.append(json.loads(line))
+            if not line:
+                continue
+            rec = json.loads(line)
+            if not rec.get("is_augmented", False):
+                group_id += 1
+            rec["_group_id"] = group_id
+            records.append(rec)
     return records
 
 
@@ -94,6 +105,7 @@ def convert_records(
             description, hs_code, rec.get("confidence_basis", ""), code_length, simple_target
         )
         schema_rec["_is_augmented"] = bool(rec.get("is_augmented", False))
+        schema_rec["_group_id"] = rec["_group_id"]
         converted.append(schema_rec)
     return converted, skipped
 
@@ -130,8 +142,12 @@ def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
 def stratified_split(
     records: list[dict], eval_ratio: float = 0.2, seed: int = 42
 ) -> tuple[list[dict], list[dict], int]:
-    """6자리 HS코드 기준 stratified split. 같은 클래스 내에서는 원본
-    (_is_augmented=False)을 증강본보다 eval에 우선 배정한다.
+    """6자리 HS코드 기준 stratified split. 같은 원본에서 나온 레코드(원본 +
+    그 패러프레이징들)는 _group_id로 묶어 통째로 train 또는 eval 한쪽에만 배정한다
+    (그룹을 쪼개 배정하면 같은 상품을 표현만 바꾼 문장이 train/eval 양쪽에 들어가는
+    데이터 누수가 생긴다). eval로 뽑힌 그룹은 원본(_is_augmented=False)만 eval에
+    쓰고, 그 그룹의 패러프레이징본은 train에도 넣지 않고 버린다 — train에 넣으면
+    eval 원본과 near-duplicate라 다시 새기 때문이다.
     (train, eval, 스킵된 클래스 수) 반환."""
     rng = random.Random(seed)
     by_class: dict[str, list[dict]] = defaultdict(list)
@@ -141,20 +157,26 @@ def stratified_split(
     train, eval_ = [], []
     skipped_classes = 0
     for code, class_records in by_class.items():
-        if len(class_records) == 1:
+        groups: dict[int, list[dict]] = defaultdict(list)
+        for rec in class_records:
+            groups[rec["_group_id"]].append(rec)
+        group_ids = list(groups.keys())
+
+        if len(group_ids) == 1:
             train.extend(class_records)
             skipped_classes += 1
             continue
 
-        originals = [r for r in class_records if not r["_is_augmented"]]
-        augmented = [r for r in class_records if r["_is_augmented"]]
-        rng.shuffle(originals)
-        rng.shuffle(augmented)
+        rng.shuffle(group_ids)
+        n_eval_groups = max(1, round(len(group_ids) * eval_ratio))
+        eval_group_ids = set(group_ids[:n_eval_groups])
 
-        n_eval = max(1, round(len(class_records) * eval_ratio))
-        eval_pool = originals + augmented  # 원본 우선 배정
-        eval_.extend(eval_pool[:n_eval])
-        train.extend(eval_pool[n_eval:])
+        for gid, group_records in groups.items():
+            if gid in eval_group_ids:
+                originals = [r for r in group_records if not r["_is_augmented"]]
+                eval_.extend(originals)  # 패러프레이징본은 버림 (train과의 근접중복 방지)
+            else:
+                train.extend(group_records)
 
     rng.shuffle(train)
     rng.shuffle(eval_)
@@ -162,7 +184,10 @@ def stratified_split(
 
 
 def strip_internal_fields(records: list[dict]) -> list[dict]:
-    return [{k: v for k, v in rec.items() if k != "_is_augmented"} for rec in records]
+    return [
+        {k: v for k, v in rec.items() if k not in ("_is_augmented", "_group_id")}
+        for rec in records
+    ]
 
 
 def write_jsonl(records: list[dict], path: Path) -> None:
