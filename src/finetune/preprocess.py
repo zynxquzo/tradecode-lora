@@ -197,6 +197,20 @@ def write_jsonl(records: list[dict], path: Path) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def split_held_out_chapters(
+    records: list[dict], exclude_chapters: set[str]
+) -> tuple[list[dict], list[dict]]:
+    """2자리 류(chapter) 기준으로 exclude_chapters에 속하는 레코드를 완전히 분리해낸다.
+    leave-one-chapter-out 일반화 테스트용 - held_out은 train/eval split 대상에서
+    아예 빠지고, 그 류를 전혀 학습하지 않은 모델을 "본 적 없는 카테고리"로
+    평가하는 데만 쓴다. (included, held_out) 반환."""
+    included, held_out = [], []
+    for rec in records:
+        chapter = rec["output"]["hs_code"][:2]
+        (held_out if chapter in exclude_chapters else included).append(rec)
+    return included, held_out
+
+
 def run(
     input_path: Path,
     output_dir: Path,
@@ -204,6 +218,7 @@ def run(
     seed: int = 42,
     code_length: int = DEFAULT_CODE_LENGTH,
     simple_target: bool = False,
+    exclude_chapters: set[str] | None = None,
 ) -> None:
     logger.info("증강 데이터 로드: %s", input_path)
     raw_records = load_augmented_records(input_path)
@@ -215,6 +230,16 @@ def run(
     if not converted:
         logger.error("변환된 레코드가 없습니다. augmented.jsonl 형식을 확인하세요.")
         return
+
+    held_out: list[dict] = []
+    if exclude_chapters:
+        converted, held_out = split_held_out_chapters(converted, exclude_chapters)
+        logger.info(
+            "leave-one-chapter-out: %s류 %d건을 train/eval split 대상에서 제외하고 "
+            "held_out_eval.jsonl로 분리 (원본+패러프레이징 전부 포함, 모델이 학습 중 절대 못 봄)",
+            ",".join(sorted(exclude_chapters)),
+            len(held_out),
+        )
 
     check_class_imbalance(converted)
 
@@ -233,6 +258,10 @@ def run(
     write_jsonl(strip_internal_fields(train), output_dir / "train.jsonl")
     write_jsonl(strip_internal_fields(eval_), output_dir / "eval.jsonl")
     logger.info("저장 완료: %s, %s", output_dir / "train.jsonl", output_dir / "eval.jsonl")
+
+    if held_out:
+        write_jsonl(strip_internal_fields(held_out), output_dir / "held_out_eval.jsonl")
+        logger.info("저장 완료: %s (%d건)", output_dir / "held_out_eval.jsonl", len(held_out))
 
 
 def parse_args() -> argparse.Namespace:
@@ -256,9 +285,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="confidence_basis 없이 hs_code만 예측하도록 completion을 단순화 (진단용)",
     )
+    parser.add_argument(
+        "--exclude-chapters",
+        type=str,
+        default=None,
+        help="2자리 류 코드를 쉼표로 나열 (예: 85). 해당 류를 train/eval에서 완전히 빼고 "
+        "held_out_eval.jsonl로 따로 저장 - leave-one-chapter-out 일반화 테스트용",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run(args.input, args.output_dir, args.eval_ratio, args.seed, args.code_length, args.simple_target)
+    exclude_chapters = (
+        {c.strip() for c in args.exclude_chapters.split(",") if c.strip()}
+        if args.exclude_chapters
+        else None
+    )
+    run(
+        args.input,
+        args.output_dir,
+        args.eval_ratio,
+        args.seed,
+        args.code_length,
+        args.simple_target,
+        exclude_chapters,
+    )

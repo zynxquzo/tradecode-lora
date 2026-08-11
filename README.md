@@ -3,7 +3,7 @@
 상품설명 텍스트를 입력받아 HS코드(품목분류코드)를 추천하는 경량 파인튜닝 모델
 (Gemma2-2B + LoRA) 및 로컬 서빙 프로젝트.
 
-## Status: ✅ 실험 4 완료 — 데이터 누수 제거 후 Exact Match 93.46%
+## Status: ✅ 실험 5 완료 — 학습 카탈로그 범위 내에서만 안전하게 사용 가능함을 확인
 
 Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 → 재평가로
 이어지는 전체 파이프라인을 구축했고, 세 차례 실험을 거치며 실패를 원인까지
@@ -42,12 +42,28 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
   재구성해 재학습 → **eval.jsonl 107건 기준 Exact Match 93.46%**. 97.53%
   대비 -4.07%p로, 우려했던 것만큼 크게 떨어지지 않아 모델이 단순 암기를 넘어
   어느 정도 일반화 가능한 패턴을 배웠다는 근거가 됐다.
+- **실험 5** (완료): 실험 4까지의 정확도는 모두 "학습 때 본 것과 같은 클래스"
+  안에서 잰 것이라, "학습 때 아예 안 본 새 카테고리"에도 일반화하는지는 별개
+  질문이었다. 85류(전기기기, 220건)를 학습 데이터에서 통째로 제외하고
+  61/62/63/64/84류만으로 재학습 → 나머지 류에 대한 정확도는 94.79%로 유지됐지만
+  (일반화 자체는 잘 됨), **85류에 대해서는 Exact/Partial(2자리)/Top-3 전부
+  0.00%**였다. 같은 85류 220건을 파인튜닝 안 한 순정 `gemma2:2b`(zero-shot)에게
+  물어보면 Partial Match(2자리)가 33.18%로, 사전학습 지식으로 최소한 "류"는
+  어느 정도 맞히는 것과 대조적이었다 — **파인튜닝이 모델이 원래 갖고 있던
+  지식을 지운 게 아니라, 학습한 카탈로그 범위 밖의 답을 아예 후보에서
+  배제해버린 것**. 게다가 Parse Failure Rate는 0%(항상 형식은 멀쩡한 답을
+  냄)라, "모르겠다"는 신호 없이 학습 범위 안의 엉뚱한 코드를 확신 있게
+  내놓는다. 결론: 이 모델은 **학습 카탈로그 범위 안에서만** 안전하게 쓸 수
+  있고, 범위 밖 상품이 들어올 수 있는 환경에서는 OOD 탐지나 사람 검수 없이
+  단독 배포하면 위험하다.
 
 자세한 경과는 [`docs/04-comparison.md`](docs/04-comparison.md)(실험 1),
 [`docs/08-experiment2_training_log.md`](docs/08-experiment2_training_log.md)(실험 2 원인 분석),
 [`docs/10-experiment3_investigation.md`](docs/10-experiment3_investigation.md)(실험 3 전체 조사 기록),
 [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md)(실험 4 데이터 누수
-제거 및 재평가 결과)에 정리했다.
+제거 및 재평가 결과), [`docs/16-experiment5_ch85heldout_result.md`](docs/16-experiment5_ch85heldout_result.md)
++ [`docs/17-experiment5_ch85_zeroshot_baseline.md`](docs/17-experiment5_ch85_zeroshot_baseline.md)
+(실험 5 leave-one-chapter-out 결과)에 정리했다.
 
 ## 결과 요약
 
@@ -95,6 +111,25 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 
 원본 리포트: [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md).
 
+**실험 5** (leave-one-chapter-out: 85류 제외 학습, code-length 4)
+
+| 지표 | 학습 범위 내 (61/62/63/64/84류, 96건) | 85류 held-out (220건, fine-tuned) | 85류 (220건, zero-shot gemma2:2b) |
+|---|---|---|---|
+| Exact Match (4자리) | 94.79% | 0.00% | 2.73% |
+| Partial Match (2자리) | 100.00% | 0.00% | 33.18% |
+| Top-3 Recall | 94.79% | 0.00% | 5.91% |
+| Parse Failure Rate | 0.00% | 0.00% | 4.09% |
+
+학습 범위 내 정확도는 실험 4와 비슷하게 유지되지만(85류를 빼도 나머지 류
+성능엔 영향 없음), 학습 때 아예 안 본 85류에 대해서는 fine-tuned 모델이
+zero-shot보다도 못하다 — fine-tuning이 카탈로그 밖 지식을 아예 못 쓰게
+좁혀버린다는 뜻.
+
+원본 리포트: [`docs/15-experiment5_indist_result.md`](docs/15-experiment5_indist_result.md)
+(학습 범위 내), [`docs/16-experiment5_ch85heldout_result.md`](docs/16-experiment5_ch85heldout_result.md)
+(85류 held-out, fine-tuned), [`docs/17-experiment5_ch85_zeroshot_baseline.md`](docs/17-experiment5_ch85_zeroshot_baseline.md)
+(85류, zero-shot).
+
 ## 문서
 
 | 문서 | 내용 |
@@ -113,6 +148,10 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 | [`docs/11-experiment3_finetuned_result.md`](docs/11-experiment3_finetuned_result.md) | 실험 3 최종 파인튜닝 재평가 결과 (405건, Exact 97.53%) |
 | [`docs/12-experiment4_leakfixed_training_log.md`](docs/12-experiment4_leakfixed_training_log.md) | 실험 4 학습 로그 (누수 제거 데이터로 재학습) |
 | [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md) | 실험 4 파인튜닝 재평가 결과 (107건, Exact 93.46%) |
+| [`docs/14-experiment5_ch85heldout_training_log.md`](docs/14-experiment5_ch85heldout_training_log.md) | 실험 5 학습 로그 (85류 제외 학습) |
+| [`docs/15-experiment5_indist_result.md`](docs/15-experiment5_indist_result.md) | 실험 5 학습 범위 내(61/62/63/64/84류) 재평가 결과 (96건, Exact 94.79%) |
+| [`docs/16-experiment5_ch85heldout_result.md`](docs/16-experiment5_ch85heldout_result.md) | 실험 5 85류 held-out 평가 결과 (220건, fine-tuned, 전부 0%) |
+| [`docs/17-experiment5_ch85_zeroshot_baseline.md`](docs/17-experiment5_ch85_zeroshot_baseline.md) | 실험 5 85류 zero-shot 베이스라인 (220건, gemma2:2b, Partial 33.18%) |
 
 ## 폴더 구조
 
@@ -246,3 +285,20 @@ python src/eval/baseline_eval.py --eval-file data/processed_simple/eval.jsonl \
   split 단위를 좁혀야 한다는 걸 확인했다. 고친 뒤에도(누수 제거 후에도)
   93%대 정확도가 유지된 게 오히려 이 모델이 완전한 암기는 아니었다는 걸
   보여준 셈이다.
+- **"일반화"는 한 단어가 아니라 최소 두 축으로 나눠서 물어야 한다**: 실험
+  4까지의 정확도는 전부 "학습 때 본 것과 같은 클래스" 안에서 "표현만 다른
+  입력"에 대한 일반화였다. 이것과 "학습 때 아예 안 본 새 클래스/카테고리"에
+  대한 일반화는 완전히 다른 질문이고, 전자가 잘 된다고 후자도 잘 되는 게
+  아니다(실험 5: 전자 94.79%, 후자 0.00%). 평가 설계를 할 때 "무엇에 대해
+  일반화를 주장하는지"를 먼저 명시해야, 숫자 하나로 성능을 과장하거나
+  과소평가하지 않는다.
+- **파인튜닝은 지식을 안 넣어줄 뿐 아니라, 있던 지식도 못 쓰게 좁힐 수 있다**:
+  85류를 뺀 파인튜닝 모델은 85류에서 Partial Match(2자리)조차 0%였는데,
+  파인튜닝 안 한 순정 베이스 모델(zero-shot)은 같은 85류에서 33.18%를
+  기록했다. 베이스 모델이 사전학습 때 이미 갖고 있던 지식을, 좁은 카탈로그로
+  파인튜닝하면서 "학습한 라벨 공간 밖은 아예 후보에서 배제"하는 방향으로
+  덮어써버린 것 — 게다가 Parse Failure Rate는 0%(항상 형식은 멀쩡함)라
+  "모르겠다"는 신호도 없이 확신 있게 틀린 답을 낸다. 좁은 도메인으로
+  파인튜닝한 모델을 배포할 땐 "학습 카탈로그 밖의 입력이 들어올 수 있는가"를
+  반드시 확인하고, 그렇다면 OOD 탐지나 사람 검수 단계를 반드시 같이 설계해야
+  한다.

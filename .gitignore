@@ -20,6 +20,7 @@ data/processed/*.jsonl
 !data/processed/schema_example.jsonl
 data/processed_simple/
 data/processed_simple_leaky_backup/
+data/processed_ch85heldout/
 
 # llama.cpp 배포 바이너리 (재다운로드 가능, 용량 큼)
 llama-cpp-bin/
@@ -51,3 +52,4 @@ _*.txt
 # 개인 노트 (비공개)
 docs/PERSONAL_NOTES.md
 docs/SESSION_HANDOFF.md
+docs/INTERVIEW_PREP.md
