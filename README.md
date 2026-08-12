@@ -102,14 +102,16 @@ Zero-shot baseline 측정 → LoRA 파인튜닝 → GGUF 변환/Ollama 서빙 �
 
 **실험 4** (4자리 타깃, train/eval 데이터 누수 제거, 107건 재평가)
 
-| 지표 | Fine-tuned (LoRA) |
-|---|---|
-| Exact Match (4자리) | **93.46%** |
-| Partial Match (2자리) | 99.07% |
-| Top-3 Recall | 93.46% |
-| Parse Failure Rate | 0.93% |
+| 지표 | Baseline (zero-shot, gemma2:2b) | Fine-tuned (LoRA) | 개선폭 |
+|---|---|---|---|
+| Exact Match (4자리) | 1.87% | **93.46%** | +91.59%p |
+| Partial Match (2자리) | 45.79% | 99.07% | +53.28%p |
+| Top-3 Recall | 5.61% | 93.46% | +87.85%p |
+| Parse Failure Rate | 0.00% | 0.93% | +0.93%p |
 
-원본 리포트: [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md).
+원본 리포트: [`docs/13-experiment4_leakfixed_result.md`](docs/13-experiment4_leakfixed_result.md)
+(fine-tuned), [`docs/18-experiment4_zeroshot_baseline.md`](docs/18-experiment4_zeroshot_baseline.md)
+(baseline, 같은 107건 eval set 기준).
 
 **실험 5** (leave-one-chapter-out: 85류 제외 학습, code-length 4)
 
@@ -152,6 +154,7 @@ zero-shot보다도 못하다 — fine-tuning이 카탈로그 밖 지식을 아�
 | [`docs/15-experiment5_indist_result.md`](docs/15-experiment5_indist_result.md) | 실험 5 학습 범위 내(61/62/63/64/84류) 재평가 결과 (96건, Exact 94.79%) |
 | [`docs/16-experiment5_ch85heldout_result.md`](docs/16-experiment5_ch85heldout_result.md) | 실험 5 85류 held-out 평가 결과 (220건, fine-tuned, 전부 0%) |
 | [`docs/17-experiment5_ch85_zeroshot_baseline.md`](docs/17-experiment5_ch85_zeroshot_baseline.md) | 실험 5 85류 zero-shot 베이스라인 (220건, gemma2:2b, Partial 33.18%) |
+| [`docs/18-experiment4_zeroshot_baseline.md`](docs/18-experiment4_zeroshot_baseline.md) | 실험 4와 동일한 107건 eval set 기준 zero-shot 베이스라인 (gemma2:2b, Exact 1.87%) |
 
 ## 폴더 구조
 
