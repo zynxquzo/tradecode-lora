@@ -75,7 +75,10 @@ def call_openai_paraphrase(
                 max_tokens=512,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = resp.choices[0].message.content.strip()
+            content = resp.choices[0].message.content
+            if content is None:
+                raise ValueError("빈 응답(content=None), 아마 refusal")
+            text = content.strip()
             start, end = text.find("["), text.rfind("]")
             if start == -1 or end == -1:
                 raise ValueError(f"JSON 배열을 찾을 수 없음: {text[:200]}")
