@@ -314,7 +314,7 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     eval_records = load_eval_records(args.eval_file)
-    if args.limit:
+    if args.limit is not None:
         eval_records = eval_records[: args.limit]
     logger.info(
         "eval 레코드 수: %d, 모델: %s, prompt_style: %s, code_length: %d",

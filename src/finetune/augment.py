@@ -172,7 +172,7 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     rows = load_raw_rows(args.input)
-    if args.limit:
+    if args.limit is not None:
         rows = rows[: args.limit]
     logger.info("증강 대상: %d행, 모델: %s, 행당 증강 수: %d", len(rows), args.model, args.n_per_item)
 
