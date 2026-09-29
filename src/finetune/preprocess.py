@@ -130,10 +130,17 @@ def check_class_imbalance(records: list[dict], top_n: int = 10) -> Counter:
                 100 * top_share,
             )
 
-    singleton_classes = [code for code, cnt in counts.items() if cnt == 1]
+    # stratified_split은 레코드 수가 아니라 _group_id(원본 소스) 수가 1개인 클래스를
+    # 통째로 train에 배정한다 — 원본 1건 + 패러프레이징 여러 건이라 레코드 수는
+    # 1보다 커도 그룹은 1개뿐인 클래스도 여기 해당되므로, cnt==1이 아니라 그룹 수
+    # 기준으로 세야 실제 split 결과와 맞는 경고가 나온다.
+    groups_per_class: dict[str, set] = defaultdict(set)
+    for rec in records:
+        groups_per_class[rec["output"]["hs_code"]].add(rec["_group_id"])
+    singleton_classes = [code for code, gids in groups_per_class.items() if len(gids) == 1]
     if singleton_classes:
         logger.warning(
-            "샘플이 1개뿐인 HS코드가 %d개 있습니다. 해당 클래스는 train에만 배정됩니다.",
+            "원본 소스가 1개뿐인 HS코드가 %d개 있습니다. 해당 클래스는 train에만 배정됩니다.",
             len(singleton_classes),
         )
     return counts
