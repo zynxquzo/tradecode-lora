@@ -252,7 +252,7 @@ def run(
 
     train, eval_, skipped_classes = stratified_split(converted, eval_ratio=eval_ratio, seed=seed)
     logger.info(
-        "split 완료: train=%d건, eval=%d건, 샘플 1개라 split 불가했던 클래스=%d개",
+        "split 완료: train=%d건, eval=%d건, 원본 소스 1개라 split 불가했던 클래스=%d개",
         len(train),
         len(eval_),
         skipped_classes,
