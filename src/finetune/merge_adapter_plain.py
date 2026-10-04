@@ -50,7 +50,7 @@ def run(args: argparse.Namespace) -> None:
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     adapter_config_path = args.adapter_dir / "adapter_config.json"
-    base_model_name = json.loads(adapter_config_path.read_text())["base_model_name_or_path"]
+    base_model_name = json.loads(adapter_config_path.read_text(encoding="utf-8"))["base_model_name_or_path"]
     logger.info("베이스 모델(학습에 실제로 쓰인 4bit 체크포인트 그대로): %s", base_model_name)
 
     logger.info("베이스 모델 로드 (4bit, 파일이 이 형식으로만 저장돼 있어 읽기 위해 필요)")
