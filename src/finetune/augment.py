@@ -93,15 +93,17 @@ def call_openai_paraphrase(
             logger.warning(
                 "API 오류 (시도 %d/%d), %.1f초 후 재시도: %s", attempt, max_retries, delay, e
             )
-            time.sleep(delay)
-            delay *= 2
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
         except (ValueError, json.JSONDecodeError) as e:
             last_error = e
             logger.warning(
                 "응답 파싱 실패 (시도 %d/%d), %.1f초 후 재시도: %s", attempt, max_retries, delay, e
             )
-            time.sleep(delay)
-            delay *= 2
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
     logger.error("최대 재시도 초과, 이 행은 증강 스킵: %s", last_error)
     return []
 
