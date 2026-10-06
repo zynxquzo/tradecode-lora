@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 
 def run(args: argparse.Namespace) -> None:
+    if not args.adapter_dir.is_dir():
+        sys.exit(f"adapter 디렉토리를 찾을 수 없음: {args.adapter_dir}")
+
     from unsloth import FastLanguageModel
 
     logger.info("adapter + 베이스 모델 로드 (unsloth): %s", args.adapter_dir)
