@@ -78,7 +78,7 @@ def build_rows(
     rng = random.Random(seed)
     rows = []
     for ch in chapters:
-        candidates = [e for e in hs6_entries if e[0][:2] == ch]
+        candidates = [e for e in hs6_entries if e[0][:2] == ch and e[0][:4] in hs4_map]
         rng.shuffle(candidates)
         selected = candidates[:per_chapter]
 
@@ -87,8 +87,6 @@ def build_rows(
 
         for code, kor, eng in selected:
             heading = code[:4]
-            if heading not in hs4_map:
-                continue
             heading_kor, heading_eng = hs4_map[heading]
 
             eng_clean = eng.rstrip(" :").rstrip(".")
