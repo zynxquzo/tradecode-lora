@@ -64,7 +64,7 @@ ZERO_SHOT_PROMPT_TEMPLATE = """당신은 무역 품목분류 전문가입니다.
 
 # src/finetune/train.py의 학습 프롬프트(PROMPT_TEMPLATE)와 반드시 동일한 형식이어야
 # 파인튜닝된 모델이 학습 때 익힌 출력을 낸다. instruction 문구는 data/processed의
-# 스키마(preprocess.py의 INSTRUCTION_TEXT, --code-length)와 일치시켰다.
+# 스키마(preprocess.py의 to_schema_record, --code-length)와 일치시켰다.
 FINETUNED_PROMPT_TEMPLATE = """### Instruction:
 다음 상품설명에 해당하는 HS코드를 {code_length}자리까지 추천하고 근거를 설명하세요.
 
