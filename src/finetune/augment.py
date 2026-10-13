@@ -58,6 +58,8 @@ Respond with ONLY a JSON array of {n} strings, nothing else. Example format:
 
 
 def load_raw_rows(input_path: Path) -> list[dict]:
+    if not input_path.is_file():
+        raise FileNotFoundError(f"원본 CSV 파일을 찾을 수 없습니다: {input_path}")
     with open(input_path, encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
 
