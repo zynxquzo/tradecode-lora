@@ -227,6 +227,9 @@ def run(
     simple_target: bool = False,
     exclude_chapters: set[str] | None = None,
 ) -> None:
+    if not input_path.is_file():
+        sys.exit(f"증강 데이터 파일을 찾을 수 없음: {input_path}")
+
     logger.info("증강 데이터 로드: %s", input_path)
     raw_records = load_augmented_records(input_path)
     logger.info("원본 레코드 수: %d", len(raw_records))
