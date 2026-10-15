@@ -166,6 +166,9 @@ def build_log_callback(log_writer: TrainingLogWriter):
 
 
 def run(args: argparse.Namespace) -> None:
+    if not args.train_file.is_file():
+        sys.exit(f"학습 데이터 파일을 찾을 수 없음: {args.train_file}")
+
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
     # 해도 에러 나지 않도록).
