@@ -313,6 +313,8 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
+    if not args.eval_file.is_file():
+        sys.exit(f"평가 데이터 파일을 찾을 수 없음: {args.eval_file}")
     eval_records = load_eval_records(args.eval_file)
     if args.limit is not None:
         eval_records = eval_records[: args.limit]
