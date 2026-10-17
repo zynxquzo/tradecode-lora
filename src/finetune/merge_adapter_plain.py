@@ -44,6 +44,10 @@ def run(args: argparse.Namespace) -> None:
     if not args.adapter_dir.is_dir():
         sys.exit(f"adapter 디렉토리를 찾을 수 없음: {args.adapter_dir}")
 
+    adapter_config_path = args.adapter_dir / "adapter_config.json"
+    if not adapter_config_path.is_file():
+        sys.exit(f"adapter_config.json을 찾을 수 없음: {adapter_config_path}")
+
     import json
 
     import bitsandbytes.functional as bnb_functional
@@ -52,7 +56,6 @@ def run(args: argparse.Namespace) -> None:
     from peft import PeftModel
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-    adapter_config_path = args.adapter_dir / "adapter_config.json"
     base_model_name = json.loads(adapter_config_path.read_text(encoding="utf-8"))["base_model_name_or_path"]
     logger.info("베이스 모델(학습에 실제로 쓰인 4bit 체크포인트 그대로): %s", base_model_name)
 
