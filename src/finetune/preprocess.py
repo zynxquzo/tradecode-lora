@@ -238,8 +238,7 @@ def run(
     logger.info("변환 완료: %d건 성공, %d건 스킵(description/hs_code 누락)", len(converted), skipped)
 
     if not converted:
-        logger.error("변환된 레코드가 없습니다. augmented.jsonl 형식을 확인하세요.")
-        return
+        sys.exit("변환된 레코드가 없습니다. augmented.jsonl 형식을 확인하세요.")
 
     held_out: list[dict] = []
     if exclude_chapters:
