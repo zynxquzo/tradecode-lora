@@ -127,7 +127,7 @@ if __name__ == "__main__":
     if not args.xlsx.is_file():
         raise FileNotFoundError(f"HS부호 엑셀 파일을 찾을 수 없습니다: {args.xlsx}")
 
-    wb =openpyxl.load_workbook(args.xlsx, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(args.xlsx, read_only=True, data_only=True)
     hs2_map = load_hs2(wb[HS2_SHEET])
     hs4_map = load_hs4(wb[HS4_SHEET])
     hs6_entries = load_hs6_entries(wb[HS6_SHEET])
