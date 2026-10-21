@@ -166,6 +166,7 @@ def build_log_callback(log_writer: TrainingLogWriter):
 
 
 def run(args: argparse.Namespace) -> None:
+    # 모델 로드(다운로드+양자화)에 수 분이 걸리므로, 학습 파일이 없으면 그 전에 바로 실패시킨다.
     if not args.train_file.is_file():
         sys.exit(f"학습 데이터 파일을 찾을 수 없음: {args.train_file}")
 
@@ -177,10 +178,6 @@ def run(args: argparse.Namespace) -> None:
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, EarlyStoppingCallback, set_seed
     from trl import SFTConfig, SFTTrainer
-
-    # 모델 로드(다운로드+양자화)에 수 분이 걸리므로, 학습 파일이 없으면 그 전에 바로 실패시킨다.
-    if not args.train_file.is_file():
-        raise FileNotFoundError(f"학습 데이터 파일을 찾을 수 없습니다: {args.train_file}")
 
     set_seed(args.seed)
 
