@@ -229,6 +229,9 @@ def run(
 ) -> None:
     if not input_path.is_file():
         sys.exit(f"증강 데이터 파일을 찾을 수 없음: {input_path}")
+    # eval_ratio가 0 이하면 eval이 비고, 1 이상이면 train이 비므로 로드 전에 막는다.
+    if not 0 < eval_ratio < 1:
+        sys.exit(f"--eval-ratio는 0보다 크고 1보다 작아야 함: {eval_ratio}")
 
     logger.info("증강 데이터 로드: %s", input_path)
     raw_records = load_augmented_records(input_path)
