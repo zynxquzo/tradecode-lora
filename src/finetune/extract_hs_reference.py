@@ -16,6 +16,7 @@ confidence_basis)로 변환하는 스크립트.
 import argparse
 import csv
 import random
+import sys
 from pathlib import Path
 
 import openpyxl
@@ -126,6 +127,8 @@ if __name__ == "__main__":
 
     if not args.xlsx.is_file():
         raise FileNotFoundError(f"HS부호 엑셀 파일을 찾을 수 없습니다: {args.xlsx}")
+    if args.per_chapter < 1:
+        sys.exit(f"--per-chapter는 1 이상이어야 함: {args.per_chapter}")
 
     wb = openpyxl.load_workbook(args.xlsx, read_only=True, data_only=True)
     hs2_map = load_hs2(wb[HS2_SHEET])
