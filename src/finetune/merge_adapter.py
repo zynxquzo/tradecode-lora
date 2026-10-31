@@ -41,6 +41,9 @@ def run(args: argparse.Namespace) -> None:
     if not adapter_config_path.is_file():
         sys.exit(f"adapter_config.json을 찾을 수 없음: {adapter_config_path}")
 
+    if args.max_seq_length < 1:
+        sys.exit(f"--max-seq-length는 1 이상이어야 함: {args.max_seq_length}")
+
     from unsloth import FastLanguageModel
 
     logger.info("adapter + 베이스 모델 로드 (unsloth): %s", args.adapter_dir)
