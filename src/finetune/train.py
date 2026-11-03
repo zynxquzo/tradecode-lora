@@ -172,6 +172,8 @@ def run(args: argparse.Namespace) -> None:
     # val_ratio가 1 이상이면 train 셋이 비어 버리므로 모델 로드 전에 막는다.
     if not 0 < args.val_ratio < 1:
         sys.exit(f"--val-ratio는 0보다 크고 1보다 작아야 함: {args.val_ratio}")
+    if args.max_seq_length < 1:
+        sys.exit(f"--max-seq-length는 1 이상이어야 함: {args.max_seq_length}")
 
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
