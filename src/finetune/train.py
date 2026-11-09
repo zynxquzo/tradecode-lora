@@ -184,6 +184,8 @@ def run(args: argparse.Namespace) -> None:
         sys.exit(f"--lora-alpha는 1 이상이어야 함: {args.lora_alpha}")
     if args.learning_rate <= 0:
         sys.exit(f"--learning-rate는 0보다 커야 함: {args.learning_rate}")
+    if args.epochs < 1:
+        sys.exit(f"--epochs는 1 이상이어야 함: {args.epochs}")
 
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
