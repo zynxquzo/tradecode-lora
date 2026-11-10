@@ -177,6 +177,8 @@ if __name__ == "__main__":
     args = parse_args()
     if not args.input.is_file():
         sys.exit(f"원본 데이터 파일을 찾을 수 없음: {args.input}")
+    if args.limit is not None and args.limit < 1:
+        sys.exit(f"--limit은 1 이상이어야 함: {args.limit}")
     rows = load_raw_rows(args.input)
     if args.limit is not None:
         rows = rows[: args.limit]
