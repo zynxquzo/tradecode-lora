@@ -190,6 +190,8 @@ def run(args: argparse.Namespace) -> None:
         sys.exit(f"--max-steps는 1 이상이어야 함: {args.max_steps}")
     if not any(m.strip() for m in args.target_modules.split(",")):
         sys.exit(f"--target-modules에 모듈이 하나 이상 있어야 함: {args.target_modules!r}")
+    if not args.base_model.strip():
+        sys.exit(f"--base-model은 비어 있을 수 없음: {args.base_model!r}")
 
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
