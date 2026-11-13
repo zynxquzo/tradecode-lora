@@ -192,6 +192,9 @@ def run(args: argparse.Namespace) -> None:
         sys.exit(f"--target-modules에 모듈이 하나 이상 있어야 함: {args.target_modules!r}")
     if not args.base_model.strip():
         sys.exit(f"--base-model은 비어 있을 수 없음: {args.base_model!r}")
+    # output-dir가 일반 파일이면 학습 끝에서야 adapter 저장이 실패하므로 모델 로드 전에 막는다.
+    if args.output_dir.is_file():
+        sys.exit(f"--output-dir가 디렉터리가 아니라 파일임: {args.output_dir}")
 
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
