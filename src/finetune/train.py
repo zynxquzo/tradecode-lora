@@ -198,6 +198,9 @@ def run(args: argparse.Namespace) -> None:
     # training-log가 디렉터리면 로그 append 시점에 실패하므로 모델 로드 전에 막는다.
     if args.training_log.is_dir():
         sys.exit(f"--training-log가 파일이 아니라 디렉터리임: {args.training_log}")
+    # training-log의 상위 경로가 일반 파일이면 로그 파일 생성(mkdir) 시점에 실패하므로 모델 로드 전에 막는다.
+    if args.training_log.parent.is_file():
+        sys.exit(f"--training-log의 상위 경로가 디렉터리가 아니라 파일임: {args.training_log.parent}")
 
     # transformers/peft/trl/bitsandbytes는 GPU 환경(Colab/Kaggle 등)에서만 설치되어
     # 있다고 가정하고 함수 내부에서 import한다 (로컬 CPU 환경에서 이 파일을 import만
