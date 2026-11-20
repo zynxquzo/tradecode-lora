@@ -198,6 +198,9 @@ def run(args: argparse.Namespace) -> None:
     # output-dir가 일반 파일이면 학습 끝에서야 adapter 저장이 실패하므로 모델 로드 전에 막는다.
     if args.output_dir.is_file():
         sys.exit(f"--output-dir가 디렉터리가 아니라 파일임: {args.output_dir}")
+    # output-dir의 상위 경로가 일반 파일이면 checkpoints/adapter 디렉터리 생성 시점에 실패하므로 모델 로드 전에 막는다.
+    if args.output_dir.parent.is_file():
+        sys.exit(f"--output-dir의 상위 경로가 디렉터리가 아니라 파일임: {args.output_dir.parent}")
     # training-log가 디렉터리면 로그 append 시점에 실패하므로 모델 로드 전에 막는다.
     if args.training_log.is_dir():
         sys.exit(f"--training-log가 파일이 아니라 디렉터리임: {args.training_log}")
