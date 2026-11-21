@@ -125,6 +125,11 @@ if __name__ == "__main__":
     args = parse_args()
     chapters = [c.strip() for c in args.chapters.split(",") if c.strip()]
 
+    if not chapters:
+        sys.exit(f"--chapters에 류 코드가 하나도 없습니다: {args.chapters!r}")
+    invalid = [c for c in chapters if not (len(c) == 2 and c.isdigit())]
+    if invalid:
+        sys.exit(f"--chapters는 2자리 숫자 류 코드여야 함: {invalid}")
     if not args.xlsx.is_file():
         raise FileNotFoundError(f"HS부호 엑셀 파일을 찾을 수 없습니다: {args.xlsx}")
     if args.per_chapter < 1:
